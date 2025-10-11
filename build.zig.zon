@@ -1,0 +1,17 @@
+.{
+    .fingerprint = 0x8406caf3a7ff3a58,
+    .name = .llvm_wrapper,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.15.1",
+    .dependencies = .{
+        .clap = .{
+            .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
+            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.11.0.tar.gz",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
