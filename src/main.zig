@@ -26,12 +26,20 @@ fn build(alloc: std.mem.Allocator) !void {
         return;
     };
 
-    var parser = Parser.init(&lexer);
+    // for (lexer.tokens.items) |t| {
+    //     std.debug.print("t: {f}\n", .{t});
+    // }
 
+    var parser = Parser.init(&lexer, arena) catch |err| {
+        utils.print("Failed to create parser: {}\n", .{err}, .red);
+        return error.ParserFailed;
+    };
+    defer parser.deinit();
     const ast = parser.getAst(arena) catch |err| {
         utils.print("Failed to parse program: {}\n", .{err}, .red);
         return error.ParserFailed;
     };
+
     std.debug.print("ast: {}\n", .{ast});
 }
 
