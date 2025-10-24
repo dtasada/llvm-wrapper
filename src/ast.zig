@@ -106,8 +106,8 @@ pub const TopLevelNode = union(enum) {
 };
 
 pub const FunctionDefinition = struct {
-    function_name: []const u8,
-    params: ParameterList = .{},
+    name: []const u8,
+    parameters: ParameterList = .{},
     return_type: Type,
     body: Block,
 };
@@ -135,6 +135,7 @@ pub const Statement = union(enum) {
     expression: Expression,
     variable_declaration: VariableDeclaration,
     struct_declaration: StructDeclaration,
+    function_definition: FunctionDefinition,
 };
 
 const VariableSignature = struct {

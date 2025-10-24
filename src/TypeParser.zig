@@ -89,16 +89,17 @@ pub fn parseType(self: *Self, alloc: std.mem.Allocator, bp: BindingPower) Parser
 
     // while we have a led and (current bp < bp of current token)
     // continue parsing lhs
-    while (true) {
-        const current_token_kind = self.parent_parser.currentTokenKind();
-        const current_bp = self.bp_lookup.get(current_token_kind) orelse break;
+    while (self.bp_lookup.get(self.parent_parser.currentTokenKind())) |current_bp| {
+        if (@intFromEnum(current_bp) <= @intFromEnum(bp)) break;
 
-        if (@intFromEnum(current_bp) <= @intFromEnum(bp)) {
-            break;
-        }
-
-        const led_fn = try self.getHandler(.led, current_token_kind);
-
+        const led_fn = self.getHandler(.led, self.parent_parser.currentTokenKind()) catch |err|
+            switch (err) {
+                error.HandlerDoesNotExist => {
+                    utils.print("Expected type, received other.", .{}, .red);
+                    return err;
+                },
+                else => return err,
+            };
         lhs = try led_fn(self, alloc, lhs, current_bp);
     }
 

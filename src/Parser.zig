@@ -1,4 +1,5 @@
 const std = @import("std");
+const pretty = @import("pretty");
 const utils = @import("utils.zig");
 
 const Lexer = @import("Lexer.zig");
@@ -10,7 +11,7 @@ const Self = @This();
 
 const StatementHandler = *const fn (*Self, std.mem.Allocator) ParserError!ast.Statement;
 const NudHandler = *const fn (*Self, std.mem.Allocator) ParserError!ast.Expression;
-const LedHandler = *const fn (*Self, std.mem.Allocator, ast.Expression, BindingPower) ParserError!ast.Expression;
+const LedHandler = *const fn (*Self, std.mem.Allocator, *const ast.Expression, BindingPower) ParserError!ast.Expression;
 
 const StatementLookup = std.AutoHashMap(Lexer.TokenKind, StatementHandler);
 const NudLookup = std.AutoHashMap(Lexer.TokenKind, NudHandler);
@@ -97,12 +98,14 @@ pub fn init(input: *const Lexer, alloc: std.mem.Allocator) !*Self {
 
     // Call/member expressions
     try self.led(Lexer.Token.open_brace, .call, parseStructInstantiationExpression);
+    try self.led(Lexer.Token.open_paren, .call, parseCallExpression);
     try self.nud(Lexer.Token.open_bracket, parseArrayInstantiationExpression);
 
     // Statements
     try self.statement(Lexer.Token.let, parseVariableDeclarationStatement);
     try self.statement(Lexer.Token.@"var", parseVariableDeclarationStatement);
     try self.statement(Lexer.Token.@"struct", parseStructDeclarationStatement);
+    try self.statement(Lexer.Token.@"fn", parseFunctionDefinition);
 
     return self;
 }
@@ -160,98 +163,65 @@ inline fn skipToken(self: *Self) Lexer.Token {
 fn parseParameters(self: *Self, alloc: std.mem.Allocator) !ast.ParameterList {
     var params = ast.ParameterList{};
 
-    try self.expect(self.nextToken(), .@"(", "parameter list", "'('");
-
-    // `self.expectSilent(self.nextToken(), .@",")` consumes a token, so if one
-    // was wasted attempting to parse a comma, keep that in mind when attempting
-    // to parse the closing parenthesis.
-    var compensate_for_comma = false;
+    try self.expect(self.advance(), .open_paren, "parameter list", "'('");
 
     while (true) {
-        const param_name = try self.expect(self.nextToken(), .atom, "parameter list", "parameter name");
-        try self.expect(self.nextToken(), .@":", "parameter list", "':'");
-        const param_type = try self.expect(self.nextToken(), .atom, "parameter list", "parameter type");
+        const param_name = try self.expect(self.advance(), .ident, "parameter list", "parameter name");
+        try self.expect(self.advance(), .colon, "parameter list", ":");
+        const param_type = try self.type_parser.parseType(alloc, .default);
 
         try params.append(alloc, .{ .param_name = param_name, .type = param_type });
 
         // look for a comma, else a closing parenthesis
-        self.expectSilent(self.nextToken(), .@",") catch {
-            compensate_for_comma = true;
+        self.expectSilent(self.currentToken(), .comma) catch {
+            try self.expect(self.advance(), .close_paren, "parameter list", ")");
             break;
         };
+        _ = self.advance();
     }
-
-    try self.expect(
-        if (compensate_for_comma)
-            self.currentToken()
-        else
-            self.nextToken(),
-        .@")",
-        "parameter list",
-        "')'",
-    );
 
     return params;
 }
 
-// fn parseArguments(self: *Self, alloc: std.mem.Allocator) !ast.ArgumentList {
-//     var args = ast.ArgumentList{};
-//
-//     try self.expect(self.nextToken(), .@"(", "argument list", "'('");
-//
-//     // `self.expectSilent(self.nextToken(), .@",")` consumes a token, so if one
-//     // was wasted attempting to parse a comma, keep that in mind when attempting
-//     // to parse the closing parenthesis.
-//     var compensate_for_comma = false;
-//
-//     while (true) {
-//         const arg = try self.parseExpression(alloc, 0.0);
-//         try args.append(alloc, arg);
-//
-//         // look for a comma, else a closing parenthesis
-//         self.expectSilent(self.nextToken(), .@",") catch {
-//             compensate_for_comma = true;
-//             break;
-//         };
-//     }
-//
-//     try self.expect(
-//         if (compensate_for_comma)
-//             self.currentToken()
-//         else
-//             self.nextToken(),
-//         .@")",
-//         "argument list",
-//         "')'",
-//     );
-//
-//     return args;
-// }
-//
-// fn parseBlock(self: *Self, alloc: std.mem.Allocator) !ast.Block {
-//     var block = ast.Block{};
-//
-//     try self.expect(self.nextToken(), .@"{", "block", "{");
-//     switch (self.nextToken()) {
-//         .atom => |atom| {
-//             if (std.mem.eql(u8, atom, "return")) {
-//                 try block.append(alloc, .{ .return_statement = try self.parseExpression(alloc, 0.0) });
-//             }
-//         },
-//         else => |unexpected| {
-//             return self.unexpectedToken("block statement", "other", unexpected);
-//         },
-//     }
-//     try self.expect(self.nextToken(), .@"}", "block", "'}'");
-//
-//     return block;
-// }
+fn parseArguments(self: *Self, alloc: std.mem.Allocator) ParserError!ast.ArgumentList {
+    var args = ast.ArgumentList{};
+
+    try self.expect(self.advance(), .open_paren, "argument list", "(");
+
+    while (true) {
+        try args.append(alloc, try self.parseExpression(alloc, .default));
+
+        self.expectSilent(self.currentToken(), .comma) catch {
+            try self.expect(self.advance(), .close_paren, "parameter list", ")");
+            break;
+        };
+
+        _ = self.advance();
+    }
+
+    return args;
+}
+
+fn parseBlock(self: *Self, alloc: std.mem.Allocator) !ast.Block {
+    var block = ast.Block{};
+
+    try self.expect(self.advance(), .open_brace, "block", "{");
+
+    while (self.currentTokenKind() != .eof and self.currentTokenKind() != .close_brace) {
+        try block.append(alloc, try self.parseStatement(alloc));
+    }
+
+    try self.expect(self.advance(), .close_brace, "block", "'}'");
+
+    return block;
+}
 
 fn parseStatement(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Statement {
     if (self.statement_lookup.get(self.currentTokenKind())) |statement_fn| {
         return statement_fn(self, alloc);
     }
 
+    std.debug.print("can't parse as statement. {f}\n", .{self.currentToken()});
     const expression = try self.parseExpression(alloc, .default);
     try self.expect(self.currentToken(), Lexer.Token.semicolon, "statement", ";");
     _ = self.advance(); // consume semicolon
@@ -269,19 +239,16 @@ fn parsePrimaryExpression(self: *Self, _: std.mem.Allocator) !ast.Expression {
     };
 }
 
-fn parseBinaryExpression(self: *Self, alloc: std.mem.Allocator, lhs: ast.Expression, bp: BindingPower) ParserError!ast.Expression {
+fn parseBinaryExpression(self: *Self, alloc: std.mem.Allocator, lhs: *const ast.Expression, bp: BindingPower) ParserError!ast.Expression {
     const op = ast.BinaryOperator.fromLexerToken(self.advance());
     const rhs = try self.parseExpression(alloc, bp);
-
-    const new_lhs = try alloc.create(ast.Expression);
-    new_lhs.* = lhs;
 
     const new_rhs = try alloc.create(ast.Expression);
     new_rhs.* = rhs;
 
     return .{
         .binary = .{
-            .lhs = new_lhs,
+            .lhs = lhs,
             .op = op,
             .rhs = new_rhs,
         },
@@ -298,18 +265,12 @@ fn parseExpression(self: *Self, alloc: std.mem.Allocator, bp: BindingPower) Pars
 
     // while we have a led and (current bp < bp of current token)
     // continue parsing lhs
-    while (true) {
-        const current_token_kind = self.currentTokenKind();
-        const current_bp = self.bp_lookup.get(current_token_kind) orelse break;
-
-        if (@intFromEnum(current_bp) <= @intFromEnum(bp)) {
-            break;
-        }
+    while (self.bp_lookup.get(self.currentTokenKind())) |current_bp| {
+        if (@intFromEnum(current_bp) <= @intFromEnum(bp)) break;
 
         // This should be an assertion, since we found a bp
-        const led_fn = try self.getHandler(.led, current_token_kind);
-
-        lhs.* = try led_fn(self, alloc, lhs.*, try self.getHandler(.bp, self.currentTokenKind()));
+        const led_fn = try self.getHandler(.led, self.currentTokenKind());
+        lhs.* = try led_fn(self, alloc, lhs, try self.getHandler(.bp, self.currentTokenKind()));
     }
 
     return lhs.*;
@@ -358,18 +319,15 @@ fn parseVariableDeclarationStatement(self: *Self, alloc: std.mem.Allocator) Pars
     };
 }
 
-fn parseAssignmentExpression(self: *Self, alloc: std.mem.Allocator, lhs: ast.Expression, bp: BindingPower) ParserError!ast.Expression {
+fn parseAssignmentExpression(self: *Self, alloc: std.mem.Allocator, lhs: *const ast.Expression, bp: BindingPower) ParserError!ast.Expression {
     const op = self.advance();
 
     const rhs = try alloc.create(ast.Expression);
     rhs.* = try self.parseExpression(alloc, bp);
 
-    const lhs_ptr = try alloc.create(ast.Expression);
-    lhs_ptr.* = lhs;
-
     return .{
         .assignment = .{
-            .assignee = lhs_ptr,
+            .assignee = lhs,
             .op = op,
             .value = rhs,
         },
@@ -412,16 +370,23 @@ fn parseStructDeclarationStatement(self: *Self, alloc: std.mem.Allocator) Parser
 
     while (self.currentToken() != .eof and self.currentTokenKind() != Lexer.Token.close_brace) {
         // parse member
-        if (self.currentTokenKind() == Lexer.Token.ident) {
-            const member_name = try self.expect(self.advance(), Lexer.Token.ident, "struct declaration", "member name");
-            try self.expect(self.advance(), Lexer.Token.colon, "struct declaration", ":");
-            const member_type = try self.type_parser.parseType(alloc, .default);
-            try self.expect(self.advance(), Lexer.Token.semicolon, "struct declaration", ";");
+        switch (self.currentToken()) {
+            .ident => {
+                const member_name = try self.expect(self.advance(), Lexer.Token.ident, "struct declaration", "member name");
+                try self.expect(self.advance(), Lexer.Token.colon, "struct declaration", ":");
+                const member_type = try self.type_parser.parseType(alloc, .default);
+                try self.expect(self.advance(), Lexer.Token.semicolon, "struct declaration", ";");
 
-            try @"struct".struct_declaration.members.append(alloc, .{
-                .name = member_name,
-                .type = member_type,
-            });
+                try @"struct".struct_declaration.members.append(alloc, .{
+                    .name = member_name,
+                    .type = member_type,
+                });
+            },
+            .@"fn" => try @"struct".struct_declaration.methods.append(
+                alloc,
+                (try self.parseFunctionDefinition(alloc)).function_definition,
+            ),
+            else => unreachable,
         }
     }
 
@@ -430,8 +395,8 @@ fn parseStructDeclarationStatement(self: *Self, alloc: std.mem.Allocator) Parser
     return @"struct";
 }
 
-fn parseStructInstantiationExpression(self: *Self, alloc: std.mem.Allocator, lhs: ast.Expression, _: BindingPower) ParserError!ast.Expression {
-    const struct_name = switch (lhs) {
+fn parseStructInstantiationExpression(self: *Self, alloc: std.mem.Allocator, lhs: *const ast.Expression, _: BindingPower) ParserError!ast.Expression {
+    const struct_name = switch (lhs.*) {
         .ident => |ident| ident,
         else => |other| {
             utils.print("Parser: Expected struct name in struct instantiation, received {}.", .{other}, .red);
@@ -481,6 +446,32 @@ fn parseArrayInstantiationExpression(self: *Self, alloc: std.mem.Allocator) Pars
     try self.expect(self.advance(), Lexer.Token.close_brace, "array instantiation", "}");
 
     return .{ .array_instantiation = array };
+}
+
+fn parseCallExpression(self: *Self, alloc: std.mem.Allocator, lhs: *const ast.Expression, _: BindingPower) ParserError!ast.Expression {
+    return .{
+        .call = .{
+            .callee = lhs,
+            .args = try self.parseArguments(alloc),
+        },
+    };
+}
+
+fn parseFunctionDefinition(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Statement {
+    try self.expect(self.advance(), Lexer.Token.@"fn", "function definition", "fn");
+    const function_name = try self.expect(self.advance(), Lexer.Token.ident, "function definition", "function name");
+    const parameters = try self.parseParameters(alloc);
+    const return_type = try self.type_parser.parseType(alloc, .default);
+    const body = try self.parseBlock(alloc);
+
+    return .{
+        .function_definition = .{
+            .name = function_name,
+            .parameters = parameters,
+            .return_type = return_type,
+            .body = body,
+        },
+    };
 }
 
 /// A token which has a NUD handler means it expects nothing to its left
