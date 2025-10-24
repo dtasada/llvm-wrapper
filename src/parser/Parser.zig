@@ -112,7 +112,6 @@ pub fn init(input: *const Lexer, alloc: std.mem.Allocator) !*Self {
     try self.statement(Lexer.Token.@"var", statement_handlers.parseVariableDeclarationStatement);
     try self.statement(Lexer.Token.@"struct", statement_handlers.parseStructDeclarationStatement);
     try self.statement(Lexer.Token.@"fn", statement_handlers.parseFunctionDefinition);
-    try self.statement(Lexer.Token.@"if", statement_handlers.parseIfStatement);
     try self.statement(Lexer.Token.@"while", statement_handlers.parseWhileStatement);
 
     return self;

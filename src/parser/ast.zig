@@ -133,7 +133,11 @@ pub const Statement = union(enum) {
         methods: std.ArrayList(FunctionDefinition) = .{},
     };
 
-    const While = IfExpression;
+    const While = struct {
+        condition: *const Expression,
+        capture: ?[]const u8,
+        body: *const Expression,
+    };
 
     @"return": Expression,
     expression: Expression,
@@ -147,7 +151,8 @@ pub const Statement = union(enum) {
 const IfExpression = struct {
     condition: *const Expression,
     capture: ?[]const u8,
-    body: Block,
+    body: *const Expression,
+    @"else": ?*const Expression,
 };
 
 const VariableSignature = struct {

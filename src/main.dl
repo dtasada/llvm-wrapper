@@ -1,5 +1,11 @@
-if (a == b) |awe|
-	a + 2;
+if (a == b)
+	a + 2
+else if (true)
+	if (b)
+		then
+	else if (c)
+		false else finish;
 
-while (awe)
-	b + 1;
+while (optional) |unwrap| {
+	use(unwrap);
+}

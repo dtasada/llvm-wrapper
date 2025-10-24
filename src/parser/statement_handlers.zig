@@ -133,9 +133,6 @@ pub fn parseFunctionDefinition(self: *Self, alloc: std.mem.Allocator) ParserErro
     };
 }
 
-pub fn parseIfStatement(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Statement {
-    return .{ .expression = try expression_handlers.parseIfExpression(self, alloc) };
-}
 
 pub fn parseWhileStatement(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Statement {
     try self.expect(self.advance(), Lexer.Token.@"while", "while statement", "while");
@@ -158,13 +155,11 @@ pub fn parseWhileStatement(self: *Self, alloc: std.mem.Allocator) ParserError!as
         else => null,
     };
 
-    var body = ast.Block{};
-    if (self.currentTokenKind() == .open_brace) {
-        body = try self.parseBlock(alloc);
-    } else {
-        const body_statement = try parseStatement(self, alloc, .{});
-        try body.append(alloc, body_statement);
-    }
+    const body = try alloc.create(ast.Expression);
+    body.* = if (self.currentTokenKind() == .open_brace)
+        try expression_handlers.parseBlockExpression(self, alloc)
+    else
+        try expression_handlers.parseExpression(self, alloc, .default);
 
     return .{
         .@"while" = .{

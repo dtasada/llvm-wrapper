@@ -179,12 +179,23 @@ pub fn parseIfExpression(self: *Self, alloc: std.mem.Allocator) ParserError!ast.
         else => null,
     };
 
-    var body = ast.Block{};
-    if (self.currentTokenKind() == .open_brace) {
-        body = try self.parseBlock(alloc);
-    } else {
-        const body_statement = try statement_handlers.parseStatement(self, alloc, .{});
-        try body.append(alloc, body_statement);
+    const body = try alloc.create(ast.Expression);
+    body.* = if (self.currentTokenKind() == .open_brace)
+        try parseBlockExpression(self, alloc)
+    else b: {
+        std.debug.print("current token: {f}\n", .{self.currentToken()});
+        break :b try parseExpression(self, alloc, .default);
+    };
+
+    var @"else": ?*ast.Expression = null;
+    if (self.currentTokenKind() == Lexer.Token.@"else") {
+        _ = self.advance(); // consume `else`
+
+        @"else" = try alloc.create(ast.Expression);
+        @"else".?.* = if (self.currentTokenKind() == .open_brace)
+            try parseBlockExpression(self, alloc)
+        else
+            try parseExpression(self, alloc, .default);
     }
 
     return .{
@@ -192,6 +203,7 @@ pub fn parseIfExpression(self: *Self, alloc: std.mem.Allocator) ParserError!ast.
             .condition = condition,
             .capture = capture,
             .body = body,
+            .@"else" = @"else",
         },
     };
 }
