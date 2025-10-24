@@ -180,15 +180,11 @@ pub fn parseIfExpression(self: *Self, alloc: std.mem.Allocator) ParserError!ast.
     };
 
     var body = ast.Block{};
-    const position_backup = self.pos; // save position bc we're testing parse statement.
-    if (statement_handlers.parseStatement(self, alloc, .{ .silent = true, .require_semicolon = false }) catch null) |body_statement| {
-        std.debug.print("185\n", .{});
-        try body.append(alloc, body_statement);
-    } else {
-        // if body isn't a statement, it must be a block. reset self.pos back to its original position
-        std.debug.print("188\n", .{});
-        self.pos = position_backup;
+    if (self.currentTokenKind() == .open_brace) {
         body = try self.parseBlock(alloc);
+    } else {
+        const body_statement = try statement_handlers.parseStatement(self, alloc, .{});
+        try body.append(alloc, body_statement);
     }
 
     return .{

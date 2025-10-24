@@ -159,13 +159,11 @@ pub fn parseWhileStatement(self: *Self, alloc: std.mem.Allocator) ParserError!as
     };
 
     var body = ast.Block{};
-    const position_backup = self.pos; // save position bc we're testing parse statement.
-    if (parseStatement(self, alloc, .{ .silent = true }) catch null) |body_statement| {
-        try body.append(alloc, body_statement);
-    } else {
-        // if body isn't a statement, it must be a block. reset self.pos back to its original position
-        self.pos = position_backup;
+    if (self.currentTokenKind() == .open_brace) {
         body = try self.parseBlock(alloc);
+    } else {
+        const body_statement = try parseStatement(self, alloc, .{});
+        try body.append(alloc, body_statement);
     }
 
     return .{

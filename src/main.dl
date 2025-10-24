@@ -1,1 +1,5 @@
-let a = if (asd) { asdasd };
+if (a == b) |awe|
+	a + 2;
+
+while (awe)
+	b + 1;
