@@ -183,7 +183,7 @@ pub const Statement = union(enum) {
     pub const For = struct {
         iterator: *const Expression,
         capture: []const u8,
-        body: *const Expression,
+        body: *const Statement,
     };
 
     pub const If = struct {

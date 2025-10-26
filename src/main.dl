@@ -1,12 +1,5 @@
 fn main() i32 {
-    let mut i = 0;
-	while (i < 5) {
-		i = i + 1;
+    for (0..4) |i| {
+		let a = 0;
 	}
-
-	while (i > 0) {
-		i -= 1;
-	}
-
-    return i;
 }

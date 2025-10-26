@@ -283,8 +283,11 @@ pub fn parseForStatement(self: *Self, alloc: std.mem.Allocator) ParserError!ast.
     const capture = try self.expect(self.advance(), Lexer.Token.ident, "for statement capture", "for statement capture identifier");
     try self.expect(self.advance(), Lexer.Token.pipe, "for statement capture", "|");
 
-    const body = try alloc.create(ast.Expression);
-    body.* = try expression_handlers.parseBlockExpression(self, alloc);
+    const body = try alloc.create(ast.Statement);
+    body.* = if (self.currentTokenKind() == .open_brace)
+        .{ .block = try self.parseBlock(alloc) }
+    else
+        try parseStatement(self, alloc);
 
     return .{
         .@"for" = .{

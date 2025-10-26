@@ -76,6 +76,7 @@ fn compileStatement(self: *Self, statement: ast.Statement) CompilerError!void {
         .expression => |expr| _ = try self.compileExpression(expr),
         .@"if" => |if_stmt| try self.compileIfStatement(if_stmt),
         .@"while" => |while_stmt| try self.compileWhileStatement(while_stmt),
+        .@"for" => |for_stmt| try self.compileForStatement(for_stmt),
         .block => |block| try self.compileBlock(block),
         else => {},
     }
@@ -214,8 +215,69 @@ fn compileExpression(self: *Self, expr: ast.Expression) CompilerError!llvm.types
                 else => error.UnsupportedExpression,
             };
         },
+        .range => |_| return error.UnsupportedExpression,
         else => error.UnsupportedExpression,
     };
+}
+
+fn compileForStatement(self: *Self, for_stmt: ast.Statement.For) !void {
+    const iterator_expr = for_stmt.iterator.*;
+    if (iterator_expr != .range) {
+        // TODO: support other iterators
+        return error.UnsupportedExpression;
+    }
+    const range = iterator_expr.range;
+
+    const start_val = try self.compileExpression(range.start.*);
+    const end_val = try self.compileExpression(range.end.*);
+
+    const current_fn = llvm.core.LLVMGetBasicBlockParent(llvm.core.LLVMGetInsertBlock(self.builder));
+
+    // Create the loop counter variable
+    const i32_type = llvm.core.LLVMInt32TypeInContext(self.context); // Assuming i32 for now
+    const counter_alloca = llvm.core.LLVMBuildAlloca(self.builder, i32_type, "i");
+    _ = llvm.core.LLVMBuildStore(self.builder, start_val, counter_alloca);
+
+    // Create basic blocks
+    const cond_block = llvm.core.LLVMAppendBasicBlockInContext(self.context, current_fn, "for_cond");
+    const loop_block = llvm.core.LLVMAppendBasicBlockInContext(self.context, current_fn, "for_loop");
+    const after_block = llvm.core.LLVMAppendBasicBlockInContext(self.context, current_fn, "after_for");
+
+    // Jump to condition
+    _ = llvm.core.LLVMBuildBr(self.builder, cond_block);
+
+    // --- Condition Block ---
+    llvm.core.LLVMPositionBuilderAtEnd(self.builder, cond_block);
+    const counter_val = llvm.core.LLVMBuildLoad2(self.builder, i32_type, counter_alloca, "i_val");
+    const cond = llvm.core.LLVMBuildICmp(self.builder, .LLVMIntSLT, counter_val, end_val, "forcond");
+    _ = llvm.core.LLVMBuildCondBr(self.builder, cond, loop_block, after_block);
+
+    // --- Loop Body Block ---
+    llvm.core.LLVMPositionBuilderAtEnd(self.builder, loop_block);
+
+    // Add capture variable to scope
+    const original_symbol = try self.variables.fetchPut(for_stmt.capture, .{ .local = .{ .ptr = counter_alloca, .ty = i32_type, .is_mut = false } });
+
+    // Compile body
+    try self.compileStatement(for_stmt.body.*);
+
+    // Remove capture variable from scope and restore original if any
+    if (original_symbol) |sym| {
+        _ = try self.variables.put(for_stmt.capture, sym.value);
+    } else {
+        _ = self.variables.remove(for_stmt.capture);
+    }
+
+    // Increment counter
+    const one = llvm.core.LLVMConstInt(i32_type, 1, 0);
+    const next_val = llvm.core.LLVMBuildAdd(self.builder, counter_val, one, "next_i");
+    _ = llvm.core.LLVMBuildStore(self.builder, next_val, counter_alloca);
+
+    // Jump back to condition
+    _ = llvm.core.LLVMBuildBr(self.builder, cond_block);
+
+    // --- Continue ---
+    llvm.core.LLVMPositionBuilderAtEnd(self.builder, after_block);
 }
 
 fn compileWhileStatement(self: *Self, while_stmt: ast.Statement.While) !void {
