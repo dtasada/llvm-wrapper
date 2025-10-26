@@ -39,7 +39,6 @@ pub fn parseBinaryExpression(self: *Self, alloc: std.mem.Allocator, lhs: *const 
 
 pub fn parseExpression(self: *Self, alloc: std.mem.Allocator, bp: BindingPower) ParserError!ast.Expression {
     // first parse the NUD
-    std.debug.print("curren token: {f}\n", .{self.currentToken()});
     const nud_fn = try self.getHandler(.nud, self.currentTokenKind());
     var lhs = try nud_fn(self, alloc);
 
@@ -224,4 +223,18 @@ pub fn parseIfExpression(self: *Self, alloc: std.mem.Allocator) ParserError!ast.
 
 pub fn parseBlockExpression(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Expression {
     return .{ .block = try self.parseBlock(alloc) };
+}
+
+pub fn parseRangeExpression(self: *Self, alloc: std.mem.Allocator, lhs: *const ast.Expression, _: BindingPower) ParserError!ast.Expression {
+    _ = self.advance(); // move past '..'
+
+    const end = try alloc.create(ast.Expression);
+    end.* = try parseExpression(self, alloc, .default);
+
+    return .{
+        .range = .{
+            .start = lhs,
+            .end = end,
+        },
+    };
 }

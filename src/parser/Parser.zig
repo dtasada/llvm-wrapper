@@ -120,6 +120,7 @@ pub fn init(input: *const Lexer, alloc: std.mem.Allocator) !*Self {
     // other expressions
     try self.nud(Lexer.Token.open_brace, expression_handlers.parseBlockExpression);
     try self.nud(Lexer.Token.@"if", expression_handlers.parseIfExpression);
+    try self.led(Lexer.Token.dot_dot, .call, expression_handlers.parseRangeExpression);
 
     // Statements
     try self.statement(Lexer.Token.let, statement_handlers.parseVariableDeclarationStatement);
@@ -130,6 +131,7 @@ pub fn init(input: *const Lexer, alloc: std.mem.Allocator) !*Self {
     try self.statement(Lexer.Token.@"fn", statement_handlers.parseFunctionDefinition);
     try self.statement(Lexer.Token.@"while", statement_handlers.parseWhileStatement);
     try self.statement(Lexer.Token.@"return", statement_handlers.parseReturnStatement);
+    try self.statement(Lexer.Token.@"for", statement_handlers.parseForStatement);
 
     return self;
 }
@@ -226,13 +228,13 @@ pub fn expect(
     self: *const Self,
     actual: Lexer.Token,
     comptime expected: Lexer.TokenKind,
-    comptime environment: []const u8,
+    comptime context: []const u8,
     comptime expected_token: []const u8,
 ) !@FieldType(Lexer.Token, @tagName(expected)) {
     return if (std.meta.activeTag(actual) == expected)
         @field(actual, @tagName(expected))
     else
-        self.unexpectedToken(environment, expected_token, actual);
+        self.unexpectedToken(context, expected_token, actual);
 }
 
 /// Identical to `expect` but doesn't print error message.

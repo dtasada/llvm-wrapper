@@ -219,7 +219,7 @@ pub fn tokenize(self: *Self, alloc: std.mem.Allocator) !void {
             // if char is a valid non-alphanumeric character
             if (std.mem.containsAtLeastScalar(u8, non_alphanumeric, 1, char)) {
                 switch (char) {
-                    '+', '-', '*', '/', '%', '=', '!', '>', '<', '&', '|', '^' => try self.parseBinaryOperator(alloc, start_pos),
+                    '+', '-', '*', '/', '%', '=', '!', '>', '<', '&', '|', '^', '.' => try self.parseBinaryOperator(alloc, start_pos),
                     '(' => try self.appendAndNext(alloc, .open_paren),
                     ')' => try self.appendAndNext(alloc, .close_paren),
                     '[' => try self.appendAndNext(alloc, .open_bracket),
@@ -229,7 +229,6 @@ pub fn tokenize(self: *Self, alloc: std.mem.Allocator) !void {
                     ';' => try self.appendAndNext(alloc, .semicolon),
                     ':' => try self.appendAndNext(alloc, .colon),
                     ',' => try self.appendAndNext(alloc, .comma),
-                    '.' => try self.appendAndNext(alloc, .dot),
                     else => unreachable,
                 }
             } else {
@@ -250,7 +249,7 @@ pub fn tokenize(self: *Self, alloc: std.mem.Allocator) !void {
 
 fn parseBinaryOperator(self: *Self, alloc: std.mem.Allocator, start_pos: usize) !void {
     const first_token_char = self.currentChar();
-    if (!std.mem.containsAtLeastScalar(u8, "+-*/%=!><&|^", 1, first_token_char)) unreachable;
+    if (!std.mem.containsAtLeastScalar(u8, "+-*/%=!><&|^.", 1, first_token_char)) unreachable;
 
     if (self.pos + 2 <= self.input.len and std.mem.eql(u8, self.input[self.pos .. self.pos + 2], "//")) {
         const end_line_pos = std.mem.indexOfScalar(u8, self.input[self.pos..], '\n') orelse
@@ -274,6 +273,7 @@ fn parseBinaryOperator(self: *Self, alloc: std.mem.Allocator, start_pos: usize) 
         '&' => .ampersand,
         '|' => .pipe,
         '^' => .caret,
+        '.' => .dot,
         else => unreachable,
     };
 
@@ -309,6 +309,13 @@ fn parseBinaryOperator(self: *Self, alloc: std.mem.Allocator, start_pos: usize) 
                 self.pos += 1;
                 break :blk switch (first_token) {
                     .less => .shift_left,
+                    else => first_token,
+                };
+            },
+            '.' => blk: {
+                self.pos += 1;
+                break :blk switch (first_token) {
+                    .dot => .dot_dot,
                     else => first_token,
                 };
             },

@@ -262,3 +262,27 @@ pub fn parseReturnStatement(self: *Self, alloc: std.mem.Allocator) ParserError!a
     try self.expect(self.advance(), Lexer.Token.semicolon, "return statement", ";");
     return .{ .@"return" = expression };
 }
+
+pub fn parseForStatement(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Statement {
+    _ = self.advance(); // consume "for "keyeword and parse from there.
+
+    try self.expect(self.advance(), Lexer.Token.open_paren, "for statement iterator", "(");
+    const iterator = try alloc.create(ast.Expression);
+    iterator.* = try expression_handlers.parseExpression(self, alloc, .default);
+    try self.expect(self.advance(), Lexer.Token.close_paren, "for statement iterator", ")");
+
+    try self.expect(self.advance(), Lexer.Token.pipe, "for statement capture", "|");
+    const capture = try self.expect(self.advance(), Lexer.Token.ident, "for statement capture", "for statement capture identifier");
+    try self.expect(self.advance(), Lexer.Token.pipe, "for statement capture", "|");
+
+    const body = try alloc.create(ast.Expression);
+    body.* = try expression_handlers.parseBlockExpression(self, alloc);
+
+    return .{
+        .@"for" = .{
+            .iterator = iterator,
+            .capture = capture,
+            .body = body,
+        },
+    };
+}

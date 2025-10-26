@@ -86,6 +86,11 @@ pub const Expression = union(enum) {
         contents: std.ArrayList(Expression) = .{},
     };
 
+    const Range = struct {
+        start: *const Expression,
+        end: *const Expression,
+    };
+
     bad_node,
 
     // literals
@@ -103,7 +108,8 @@ pub const Expression = union(enum) {
     struct_instantiation: StructInstantiation,
     array_instantiation: ArrayInstantiation,
     block: Block,
-    @"if": IfExpression,
+    @"if": If,
+    range: Range,
 };
 
 pub const TopLevelNode = union(enum) {
@@ -161,6 +167,12 @@ pub const Statement = union(enum) {
         body: *const Expression,
     };
 
+    pub const For = struct {
+        iterator: *const Expression,
+        capture: []const u8,
+        body: *const Expression,
+    };
+
     @"return": Expression,
     expression: Expression,
     variable_declaration: VariableDeclaration,
@@ -168,11 +180,12 @@ pub const Statement = union(enum) {
     enum_declaration: EnumDeclaration,
     union_declaration: UnionDeclaration,
     function_definition: FunctionDefinition,
-    @"if": IfExpression,
+    @"if": If,
     @"while": While,
+    @"for": For,
 };
 
-pub const IfExpression = struct {
+pub const If = struct {
     condition: *const Expression,
     capture: ?[]const u8 = null,
     body: *const Expression,
