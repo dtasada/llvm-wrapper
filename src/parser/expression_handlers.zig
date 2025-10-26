@@ -104,10 +104,9 @@ pub fn parsePrefixExpression(self: *Self, alloc: std.mem.Allocator) ParserError!
 }
 
 pub fn parseGroupExpression(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Expression {
-    try self.expect(self.currentToken(), Lexer.Token.open_paren, "group expression", "(");
+    try self.expect(self.advance(), Lexer.Token.open_paren, "group expression", "(");
     const expr = try parseExpression(self, alloc, .default);
-    try self.expect(self.currentToken(), Lexer.Token.close_paren, "group expression", ")");
-    _ = self.advance();
+    try self.expect(self.advance(), Lexer.Token.close_paren, "group expression", ")");
 
     return expr;
 }

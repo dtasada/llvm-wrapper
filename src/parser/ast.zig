@@ -112,10 +112,10 @@ pub const Expression = union(enum) {
     range: Range,
 };
 
-pub const TopLevelNode = union(enum) {
-    bin_expr: Expression.Binary,
-    func_def: FunctionDefinition,
-};
+// pub const TopLevelNode = union(enum) {
+//     bin_expr: Expression.Binary,
+//     func_def: FunctionDefinition,
+// };
 
 pub const FunctionDefinition = struct {
     name: []const u8,
@@ -200,5 +200,17 @@ const VariableSignature = struct {
 pub const Type = union(enum) {
     inferred,
     symbol: []const u8,
-    array: *const Type,
+    reference: *const Type,
+    optional: *const Type,
+    array: struct {
+        inner: *const Type,
+        /// if size is `null` type is an arraylist, else it's an array.
+        /// if size is `_`, type is an array of inferred size.
+        /// if size is a valid expression, type is an array of specified size.
+        size: ?*const Expression = null,
+    },
+    error_union: struct {
+        success: *const Type,
+        @"error": ?*const Type = null,
+    },
 };

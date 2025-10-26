@@ -70,6 +70,7 @@ pub const Token = union(enum) {
 
     // unary operators
     bang,
+    question,
 
     plus,
     dash,
@@ -214,7 +215,7 @@ pub fn tokenize(self: *Self, alloc: std.mem.Allocator) !void {
             try self.parseNumber(alloc, start_pos);
         } else {
             const char = self.currentChar();
-            const non_alphanumeric = "+-*/()[]{};:,=!><&|^.";
+            const non_alphanumeric = "+-*/()[]{};:,=!><&|^.?";
 
             // if char is a valid non-alphanumeric character
             if (std.mem.containsAtLeastScalar(u8, non_alphanumeric, 1, char)) {
@@ -229,6 +230,7 @@ pub fn tokenize(self: *Self, alloc: std.mem.Allocator) !void {
                     ';' => try self.appendAndNext(alloc, .semicolon),
                     ':' => try self.appendAndNext(alloc, .colon),
                     ',' => try self.appendAndNext(alloc, .comma),
+                    '?' => try self.appendAndNext(alloc, .question),
                     else => unreachable,
                 }
             } else {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
+const expression_handlers = @import("expression_handlers.zig");
 
 const Lexer = @import("../Lexer.zig");
 const Parser = @import("Parser.zig");
@@ -48,35 +49,12 @@ pub fn init(alloc: std.mem.Allocator, parent_parser: *Parser) !Self {
 
     try self.nud(Lexer.Token.ident, parseSymbolType);
     try self.nud(Lexer.Token.open_bracket, parseArrayType);
+    try self.nud(Lexer.Token.ampersand, parseReferenceType);
+    try self.nud(Lexer.Token.question, parseOptionalType);
+    try self.nud(Lexer.Token.bang, parseInferredErrorType);
+    try self.nud(Lexer.Token.open_paren, parseGroupType);
+    try self.led(Lexer.Token.bang, .logical, parseErrorType);
     return self;
-}
-
-pub fn parseSymbolType(self: *Self, _: std.mem.Allocator) ParserError!ast.Type {
-    return .{
-        .symbol = try self.parent_parser.expect(
-            self.parent_parser.advance(),
-            Lexer.Token.ident,
-            "type descriptor",
-            "type name",
-        ),
-    };
-}
-
-pub fn parseArrayType(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Type {
-    _ = self.parent_parser.advance(); // consume '['
-
-    try self.parent_parser.expect(
-        self.parent_parser.currentToken(),
-        Lexer.Token.close_bracket,
-        "array type descriptor",
-        "]",
-    );
-    _ = self.parent_parser.advance(); // consume ']'
-
-    const underlying_type = try alloc.create(ast.Type);
-    underlying_type.* = try self.parseType(alloc, .default);
-
-    return .{ .array = underlying_type };
 }
 
 pub fn parseType(self: *Self, alloc: std.mem.Allocator, bp: BindingPower) ParserError!ast.Type {
@@ -103,6 +81,97 @@ pub fn parseType(self: *Self, alloc: std.mem.Allocator, bp: BindingPower) Parser
     }
 
     return lhs;
+}
+
+pub fn parseSymbolType(self: *Self, _: std.mem.Allocator) ParserError!ast.Type {
+    return .{
+        .symbol = try self.parent_parser.expect(
+            self.parent_parser.advance(),
+            Lexer.Token.ident,
+            "type descriptor",
+            "type name",
+        ),
+    };
+}
+
+pub fn parseReferenceType(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Type {
+    _ = self.parent_parser.advance(); // consume '&'
+
+    const inner = try alloc.create(ast.Type);
+    inner.* = try parseType(self, alloc, .default);
+
+    return .{ .reference = inner };
+}
+
+pub fn parseOptionalType(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Type {
+    _ = self.parent_parser.advance(); // consume '?'
+
+    const inner = try alloc.create(ast.Type);
+    inner.* = try parseType(self, alloc, .default);
+
+    return .{ .optional = inner };
+}
+
+pub fn parseInferredErrorType(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Type {
+    _ = self.parent_parser.advance(); // consume '!'
+
+    const success = try alloc.create(ast.Type);
+    success.* = try parseType(self, alloc, .default);
+
+    return .{ .error_union = .{ .success = success } };
+}
+
+pub fn parseErrorType(self: *Self, alloc: std.mem.Allocator, lhs: ast.Type, _: BindingPower) ParserError!ast.Type {
+    _ = self.parent_parser.advance(); // consume '!'
+
+    const @"error" = try alloc.create(ast.Type);
+    @"error".* = lhs;
+
+    const success = try alloc.create(ast.Type);
+    success.* = try parseType(self, alloc, .default);
+
+    return .{
+        .error_union = .{
+            .success = success,
+            .@"error" = @"error",
+        },
+    };
+}
+
+pub fn parseArrayType(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Type {
+    _ = self.parent_parser.advance(); // consume '['
+
+    var size: ?*ast.Expression = null;
+
+    if (self.parent_parser.currentTokenKind() != Lexer.Token.close_bracket) {
+        size = try alloc.create(ast.Expression);
+        size.?.* = try expression_handlers.parseExpression(self.parent_parser, alloc, .default);
+    }
+
+    try self.parent_parser.expect(
+        self.parent_parser.advance(),
+        Lexer.Token.close_bracket,
+        "array type descriptor",
+        "]",
+    );
+
+    const inner = try alloc.create(ast.Type);
+    inner.* = try self.parseType(alloc, .default);
+
+    return .{
+        .array = .{
+            .inner = inner,
+            .size = size,
+        },
+    };
+}
+
+pub fn parseGroupType(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Type {
+    try self.parent_parser.expect(self.parent_parser.advance(), Lexer.Token.open_paren, "group expression", "(");
+    const @"type" = try parseType(self, alloc, .default);
+    try self.parent_parser.expect(self.parent_parser.advance(), Lexer.Token.close_paren, "group expression", ")");
+
+    return @"type";
 }
 
 inline fn getHandler(
