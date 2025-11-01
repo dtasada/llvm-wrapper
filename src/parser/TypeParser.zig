@@ -84,14 +84,20 @@ pub fn parseType(self: *Self, alloc: std.mem.Allocator, bp: BindingPower) Parser
 }
 
 pub fn parseSymbolType(self: *Self, _: std.mem.Allocator) ParserError!ast.Type {
-    return .{
-        .symbol = try self.parent_parser.expect(
-            self.parent_parser.advance(),
-            Lexer.Token.ident,
-            "type descriptor",
-            "type name",
-        ),
-    };
+    const ident = try self.parent_parser.expect(
+        self.parent_parser.advance(),
+        Lexer.Token.ident,
+        "type descriptor",
+        "type name",
+    );
+
+    if (std.mem.eql(u8, ident, "Self")) {
+        return .{
+            .self_type = {},
+        };
+    }
+
+    return .{ .symbol = ident };
 }
 
 pub fn parseReferenceType(self: *Self, alloc: std.mem.Allocator) ParserError!ast.Type {

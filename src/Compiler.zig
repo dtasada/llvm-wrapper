@@ -10,9 +10,17 @@ pub const CompilerError = error{
     UnsupportedType,
     UnsupportedExpression,
     UndeclaredVariable,
+    UndeclaredType,
+    UndeclaredField,
     VariableRedeclaration,
     OutOfMemory,
     AssignmentToImmutableVariable,
+    MemberExpressionOnPrimitiveType,
+};
+
+const UserDefinedType = struct {
+    llvm_type: llvm.types.LLVMTypeRef,
+    fields: std.StringHashMap(u32), // name -> index
 };
 
 const Symbol = union(enum) {
@@ -32,6 +40,8 @@ context: llvm.types.LLVMContextRef,
 builder: llvm.types.LLVMBuilderRef,
 module: llvm.types.LLVMModuleRef,
 variables: std.ArrayList(std.StringHashMap(Symbol)) = .{},
+types: std.StringHashMap(*UserDefinedType),
+current_self_type: ?llvm.types.LLVMTypeRef = null,
 
 pub fn init(alloc: std.mem.Allocator) !*Self {
     const self = try alloc.create(Self);
@@ -46,6 +56,7 @@ pub fn init(alloc: std.mem.Allocator) !*Self {
         .context = context,
         .builder = builder,
         .module = module,
+        .types = std.StringHashMap(*UserDefinedType).init(alloc),
     };
 
     try self.variables.append(self.alloc, std.StringHashMap(Symbol).init(alloc)); // global scope
@@ -58,6 +69,14 @@ pub fn deinit(self: *Self) void {
         scope.deinit();
 
     self.variables.deinit(self.alloc);
+
+    var iter = self.types.iterator();
+    while (iter.next()) |entry| {
+        entry.value_ptr.*.fields.deinit();
+        self.alloc.destroy(entry.value_ptr.*);
+    }
+    self.types.deinit();
+
     llvm.core.LLVMDisposeBuilder(self.builder);
     llvm.core.LLVMDisposeModule(self.module);
     llvm.core.LLVMContextDispose(self.context);
@@ -106,6 +125,7 @@ fn createEntryBlockAlloca(self: *Self, @"fn": llvm.types.LLVMValueRef, ty: llvm.
 fn compileStatement(self: *Self, statement: ast.Statement) CompilerError!void {
     switch (statement) {
         .function_definition => |fn_def| try self.compileFunctionDefinition(fn_def),
+        .struct_declaration => |struct_decl| try self.compileStructDeclaration(struct_decl),
         .@"return" => |return_expr| try self.compileReturnStatement(return_expr),
         .variable_declaration => |var_decl| try self.compileVariableDeclaration(var_decl),
         .expression => |expr| _ = try self.compileExpression(expr),
@@ -117,16 +137,58 @@ fn compileStatement(self: *Self, statement: ast.Statement) CompilerError!void {
     }
 }
 
-fn compileFunctionDefinition(self: *Self, fn_def: ast.FunctionDefinition) CompilerError!void {
+fn compileStructDeclaration(self: *Self, struct_decl: ast.Statement.StructDeclaration) !void {
+    const struct_name_c = try self.cString(struct_decl.name);
+    const struct_type_ref = llvm.core.LLVMStructCreateNamed(self.context, struct_name_c);
+
+    const user_type = try self.alloc.create(UserDefinedType);
+    user_type.* = .{
+        .llvm_type = struct_type_ref,
+        .fields = std.StringHashMap(u32).init(self.alloc),
+    };
+
+    try self.types.put(struct_decl.name, user_type);
+
+    var field_types = try std.ArrayList(llvm.types.LLVMTypeRef).initCapacity(self.alloc, struct_decl.members.items.len);
+    defer field_types.deinit(self.alloc);
+
+    for (struct_decl.members.items, 0..) |field, i| {
+        try field_types.append(self.alloc, try self.compileType(field.type));
+        try user_type.fields.put(field.name, cUint(i));
+    }
+
+    llvm.core.LLVMStructSetBody(struct_type_ref, field_types.items.ptr, cUint(field_types.items.len), 0);
+
+    // Method compilation must happen *after* the struct body is set.
+    self.current_self_type = struct_type_ref;
+    defer self.current_self_type = null;
+
+    for (struct_decl.methods.items) |method| {
+        const mangled_name = try std.fmt.allocPrint(self.alloc, "__MANGLE_{s}_{s}", .{ struct_decl.name, method.name });
+        defer self.alloc.free(mangled_name);
+
+        var method_with_mangled_name = method;
+        method_with_mangled_name.name = mangled_name;
+
+        // We pass the struct type itself as the self_param, which will be a pointer to the struct.
+
+        try self.compileFunctionDefinition(method_with_mangled_name);
+    }
+}
+
+pub fn compileFunctionDefinition(self: *Self, fn_def: ast.FunctionDefinition) CompilerError!void {
     const fn_name = try self.cString(fn_def.name);
 
     const return_type = try self.compileType(fn_def.return_type);
 
-    var param_types = try std.ArrayList(llvm.types.LLVMTypeRef).initCapacity(self.alloc, fn_def.parameters.items.len);
+    var param_types = try std.ArrayList(llvm.types.LLVMTypeRef).initCapacity(
+        self.alloc,
+        fn_def.parameters.items.len,
+    );
     defer param_types.deinit(self.alloc);
-    for (fn_def.parameters.items) |param| {
+
+    for (fn_def.parameters.items) |param|
         try param_types.append(self.alloc, try self.compileType(param.type));
-    }
 
     const fn_type = llvm.core.LLVMFunctionType(return_type, param_types.items.ptr, cUint(param_types.items.len), 0);
     const fn_val = llvm.core.LLVMAddFunction(self.module, fn_name, fn_type);
@@ -135,24 +197,36 @@ fn compileFunctionDefinition(self: *Self, fn_def: ast.FunctionDefinition) Compil
     llvm.core.LLVMPositionBuilderAtEnd(self.builder, entry);
 
     try self.variables.append(self.alloc, std.StringHashMap(Symbol).init(self.alloc));
+
     for (fn_def.parameters.items, 0..) |param, i| {
         const param_val = llvm.core.LLVMGetParam(fn_val, cUint(i));
         const param_name = try self.cString(param.name);
         llvm.core.LLVMSetValueName(param_val, param_name);
-        const param_type = param_types.items[i];
+        const param_type = param_types.items[cUint(i)];
         try self.addVariable(param.name, .{ .parameter = .{ .val = param_val, .ty = param_type } });
     }
 
     try self.compileBlock(fn_def.body);
+
+    // If the function returns void and the last block doesn't have a terminator,
+    // add a `ret void` instruction.
+    const last_block = llvm.core.LLVMGetInsertBlock(self.builder);
+    const last_instr = llvm.core.LLVMGetLastInstruction(last_block);
+    const has_terminator = if (last_instr) |instr| llvm.core.LLVMIsATerminatorInst(instr) != null else false;
+
+    if (!has_terminator and llvm.core.LLVMGetTypeKind(return_type) == .LLVMVoidTypeKind) {
+        _ = llvm.core.LLVMBuildRetVoid(self.builder);
+    }
+
     var last_scope = self.variables.pop().?;
     last_scope.deinit();
 }
 
 fn compileBlock(self: *Self, block: ast.Block) CompilerError!void {
     try self.variables.append(self.alloc, std.StringHashMap(Symbol).init(self.alloc));
-    for (block.items) |statement| {
+    for (block.items) |statement|
         try self.compileStatement(statement);
-    }
+
     var last_scope = self.variables.pop().?;
     last_scope.deinit();
 }
@@ -162,18 +236,28 @@ fn compileVariableDeclaration(self: *Self, var_decl: ast.Statement.VariableDecla
         return error.VariableRedeclaration;
     }
 
-    const value = try self.compileExpression(var_decl.assigned_value);
-    const value_type = llvm.core.LLVMTypeOf(value);
-
-    const var_name = try self.cString(var_decl.variable_name);
-
     const current_block = llvm.core.LLVMGetInsertBlock(self.builder);
     const current_fn = llvm.core.LLVMGetBasicBlockParent(current_block);
-    const alloca = self.createEntryBlockAlloca(current_fn, value_type, var_name);
+    const var_name = try self.cString(var_decl.variable_name);
 
-    _ = llvm.core.LLVMBuildStore(self.builder, value, alloca);
+    switch (var_decl.assigned_value) {
+        .struct_instantiation => |inst| {
+            const user_type = self.types.get(inst.name) orelse return error.UndeclaredType;
+            const struct_type = user_type.llvm_type;
 
-    try self.addVariable(var_decl.variable_name, .{ .local = .{ .ptr = alloca, .ty = value_type, .is_mut = var_decl.is_mut } });
+            const alloca = self.createEntryBlockAlloca(current_fn, struct_type, var_name);
+            try self.compileStructInit(inst, alloca);
+            try self.addVariable(var_decl.variable_name, .{ .local = .{ .ptr = alloca, .ty = struct_type, .is_mut = var_decl.is_mut } });
+        },
+        else => {
+            const value = try self.compileExpression(var_decl.assigned_value);
+            const value_type = llvm.core.LLVMTypeOf(value);
+
+            const alloca = self.createEntryBlockAlloca(current_fn, value_type, var_name);
+            _ = llvm.core.LLVMBuildStore(self.builder, value, alloca);
+            try self.addVariable(var_decl.variable_name, .{ .local = .{ .ptr = alloca, .ty = value_type, .is_mut = var_decl.is_mut } });
+        },
+    }
 }
 
 fn compileReturnStatement(self: *Self, return_expr: ?ast.Expression) CompilerError!void {
@@ -183,8 +267,188 @@ fn compileReturnStatement(self: *Self, return_expr: ?ast.Expression) CompilerErr
     } else _ = llvm.core.LLVMBuildRetVoid(self.builder);
 }
 
+const LValue = struct {
+    ptr: llvm.types.LLVMValueRef,
+    ty: llvm.types.LLVMTypeRef,
+    is_mut: bool,
+};
+
+fn compileLValue(self: *Self, expr: ast.Expression) !LValue {
+    return switch (expr) {
+        .ident => |ident| switch (self.findVariable(ident) orelse return error.UndeclaredVariable) {
+            .local => |l| .{ .ptr = l.ptr, .ty = l.ty, .is_mut = l.is_mut },
+            .parameter => |p| .{ .ptr = p.val, .ty = p.ty, .is_mut = false },
+        },
+        .member => |member_access| {
+            const lhs_lval = try self.compileLValue(member_access.lhs.*);
+
+            var struct_ptr = lhs_lval.ptr;
+            var struct_type = lhs_lval.ty;
+
+            if (llvm.core.LLVMGetTypeKind(struct_type) == .LLVMPointerTypeKind) {
+                struct_type = llvm.core.LLVMGetElementType(lhs_lval.ty);
+                struct_ptr = llvm.core.LLVMBuildLoad2(self.builder, lhs_lval.ty, lhs_lval.ptr, "ptr_val");
+            }
+
+            if (llvm.core.LLVMGetTypeKind(struct_type) != .LLVMStructTypeKind)
+                return error.MemberExpressionOnPrimitiveType;
+
+            const struct_name_z = llvm.core.LLVMGetStructName(struct_type);
+            if (struct_name_z[0] == 0) return error.UnsupportedExpression;
+            const struct_name = std.mem.span(struct_name_z);
+
+            const user_type = self.types.get(struct_name) orelse return error.UndeclaredType;
+
+            if (member_access.rhs.* != .ident) return error.UnsupportedExpression;
+            const field_name = member_access.rhs.*.ident;
+
+            const field_index = user_type.fields.get(field_name) orelse return error.UndeclaredField;
+
+            const field_ptr = llvm.core.LLVMBuildStructGEP2(self.builder, struct_type, struct_ptr, field_index, "fieldptr");
+
+            const field_type = llvm.core.LLVMStructGetTypeAtIndex(struct_type, field_index);
+
+            return LValue{ .ptr = field_ptr, .ty = field_type, .is_mut = lhs_lval.is_mut };
+        },
+        else => error.UnsupportedExpression,
+    };
+}
+
+fn compileMemberAccessExpression(self: *Self, member_access: ast.Expression.Member) !llvm.types.LLVMValueRef {
+    const lhs_val = try self.compileExpression(member_access.lhs.*);
+    const lhs_type = llvm.core.LLVMTypeOf(lhs_val);
+
+    var struct_ptr: llvm.types.LLVMValueRef = undefined;
+    var struct_type: llvm.types.LLVMTypeRef = undefined;
+
+    if (llvm.core.LLVMGetTypeKind(lhs_type) == .LLVMPointerTypeKind) {
+        struct_ptr = lhs_val;
+        struct_type = llvm.core.LLVMGetElementType(lhs_type);
+    } else if (llvm.core.LLVMGetTypeKind(lhs_type) == .LLVMStructTypeKind) {
+        const current_fn = llvm.core.LLVMGetBasicBlockParent(llvm.core.LLVMGetInsertBlock(self.builder));
+        const temp_alloca = self.createEntryBlockAlloca(current_fn, lhs_type, "temp_struct_val");
+        _ = llvm.core.LLVMBuildStore(self.builder, lhs_val, temp_alloca);
+        struct_ptr = temp_alloca;
+        struct_type = lhs_type;
+    } else {
+        return error.UnsupportedExpression;
+    }
+
+    if (llvm.core.LLVMGetTypeKind(struct_type) != .LLVMStructTypeKind) {
+        std.debug.print("compileLValue: LHS is not a struct type after dereferencing. Kind: {s}\n", .{@tagName(llvm.core.LLVMGetTypeKind(struct_type))});
+        return error.UnsupportedExpression;
+    }
+    const struct_name_z = llvm.core.LLVMGetStructName(struct_type);
+    if (struct_name_z[0] == 0) {
+        return error.UnsupportedExpression;
+    }
+    const struct_name = std.mem.span(struct_name_z);
+
+    const user_type = self.types.get(struct_name) orelse return error.UndeclaredType;
+
+    if (member_access.rhs.* != .ident) {
+        return error.UnsupportedExpression;
+    }
+    const field_name = member_access.rhs.*.ident;
+
+    const field_index = user_type.fields.get(field_name) orelse return error.UndeclaredField;
+
+    const field_ptr = llvm.core.LLVMBuildStructGEP2(self.builder, struct_type, struct_ptr, field_index, "fieldptr");
+    const field_type = llvm.core.LLVMStructGetTypeAtIndex(struct_type, field_index);
+    return llvm.core.LLVMBuildLoad2(self.builder, field_type, field_ptr, "loadtmp");
+}
+
+fn compileStructInit(self: *Self, inst: ast.Expression.StructInstantiation, dest: llvm.types.LLVMValueRef) !void {
+    const user_type = self.types.get(inst.name) orelse return error.UndeclaredType;
+    const struct_type = user_type.llvm_type;
+
+    var member_iterator = inst.members.iterator();
+    while (member_iterator.next()) |entry| {
+        const field_name = entry.key_ptr.*;
+        const field_expr = entry.value_ptr.*;
+        const field_index = user_type.fields.get(field_name) orelse return error.UndeclaredField;
+        const value_to_set = try self.compileExpression(field_expr);
+        const field_ptr = llvm.core.LLVMBuildStructGEP2(self.builder, struct_type, dest, field_index, "fieldptr");
+        _ = llvm.core.LLVMBuildStore(self.builder, value_to_set, field_ptr);
+    }
+}
+
+fn compileStructInstantiation(self: *Self, inst: ast.Expression.StructInstantiation) !llvm.types.LLVMValueRef {
+    const user_type = self.types.get(inst.name) orelse return error.UndeclaredType;
+    const struct_type = user_type.llvm_type;
+    const alloca = self.createEntryBlockAlloca(llvm.core.LLVMGetBasicBlockParent(llvm.core.LLVMGetInsertBlock(self.builder)), struct_type, "");
+    try self.compileStructInit(inst, alloca);
+    return llvm.core.LLVMBuildLoad2(self.builder, struct_type, alloca, "loadtmp");
+}
+
+fn compileCallExpression(self: *Self, call_expr: ast.Expression.Call) !llvm.types.LLVMValueRef {
+    var compiled_args = try std.ArrayList(llvm.types.LLVMValueRef).initCapacity(self.alloc, call_expr.args.items.len);
+    defer compiled_args.deinit(self.alloc);
+
+    for (call_expr.args.items) |arg| {
+        try compiled_args.append(self.alloc, try self.compileExpression(arg));
+    }
+
+    switch (call_expr.callee.*) {
+        .member => |member_expr| {
+            // Method Call
+            const lhs = member_expr.lhs.*;
+            if (member_expr.rhs.* != .ident) return error.UnsupportedExpression;
+            const method_name = member_expr.rhs.*.ident;
+
+            var self_arg: llvm.types.LLVMValueRef = undefined;
+            var struct_type: llvm.types.LLVMTypeRef = undefined;
+
+            if (self.compileLValue(lhs) catch null) |lval| {
+                self_arg = lval.ptr;
+                struct_type = lval.ty;
+            } else {
+                const temp_val = try self.compileExpression(lhs);
+                struct_type = llvm.core.LLVMTypeOf(temp_val);
+                const current_fn = llvm.core.LLVMGetBasicBlockParent(llvm.core.LLVMGetInsertBlock(self.builder));
+                const temp_alloca = self.createEntryBlockAlloca(current_fn, struct_type, "self_temp");
+                _ = llvm.core.LLVMBuildStore(self.builder, temp_val, temp_alloca);
+                self_arg = temp_alloca;
+            }
+
+            if (llvm.core.LLVMGetTypeKind(struct_type) != .LLVMStructTypeKind) return error.UnsupportedExpression;
+
+            const struct_name_z = llvm.core.LLVMGetStructName(struct_type);
+            if (struct_name_z[0] == 0) {
+                std.debug.print("compileLValue: Anonymous struct not supported.\n", .{});
+                return error.UnsupportedExpression;
+            }
+            const struct_name = std.mem.span(struct_name_z);
+
+            const mangled_name: [*:0]const u8 = try std.fmt.allocPrintSentinel(self.alloc, "__MANGLE_{s}_{s}", .{ struct_name, method_name }, 0);
+
+            const func_to_call = llvm.core.LLVMGetNamedFunction(self.module, mangled_name) orelse return error.UndeclaredVariable;
+
+            var final_args = try std.ArrayList(llvm.types.LLVMValueRef).initCapacity(self.alloc, compiled_args.items.len + 1);
+            defer final_args.deinit(self.alloc);
+            try final_args.append(self.alloc, self_arg);
+            try final_args.appendSlice(self.alloc, compiled_args.items);
+
+            const fn_type = llvm.core.LLVMGlobalGetValueType(func_to_call);
+            return llvm.core.LLVMBuildCall2(self.builder, fn_type, func_to_call, final_args.items.ptr, @as(u32, @intCast(final_args.items.len)), "calltmp");
+        },
+        .ident => |ident| {
+            // Normal function call
+            const func_name = try self.cString(ident);
+            const func_to_call = llvm.core.LLVMGetNamedFunction(self.module, func_name) orelse return error.UndeclaredVariable;
+
+            const fn_type = llvm.core.LLVMGlobalGetValueType(func_to_call);
+            return llvm.core.LLVMBuildCall2(self.builder, fn_type, func_to_call, compiled_args.items.ptr, @as(u32, @intCast(compiled_args.items.len)), "calltmp");
+        },
+        else => return error.UnsupportedExpression,
+    }
+}
+
 fn compileExpression(self: *Self, expr: ast.Expression) CompilerError!llvm.types.LLVMValueRef {
     return switch (expr) {
+        .call => |call_expr| return try self.compileCallExpression(call_expr),
+        .member => |member_access| return try self.compileMemberAccessExpression(member_access),
+        .struct_instantiation => |inst| return try self.compileStructInstantiation(inst),
         .uint => |uint| {
             const i32_type = llvm.core.LLVMInt32TypeInContext(self.context);
             return llvm.core.LLVMConstInt(i32_type, uint, 0);
@@ -200,30 +464,17 @@ fn compileExpression(self: *Self, expr: ast.Expression) CompilerError!llvm.types
                 },
             };
         },
-        .assignment => |ass| {
-            // This logic needs to be more robust for complex assignees like member access.
-            if (ass.assignee.* != .ident) {
-                return error.UnsupportedExpression;
-            }
-            const var_name = ass.assignee.*.ident;
-            const symbol = self.findVariable(var_name) orelse return error.UndeclaredVariable;
+        .assignment => |assignment| {
+            const lval = try self.compileLValue(assignment.assignee.*);
+            if (!lval.is_mut) return error.AssignmentToImmutableVariable;
 
-            const l = switch (symbol) {
-                .local => |local| local,
-                .parameter => return error.AssignmentToImmutableVariable,
-            };
+            const rhs_value = try self.compileExpression(assignment.value.*);
 
-            if (!l.is_mut) {
-                return error.AssignmentToImmutableVariable;
-            }
-
-            const rhs_value = try self.compileExpression(ass.value.*);
-
-            const final_value = switch (ass.op) {
+            // Handle compound assignment operators like +=
+            const final_value = switch (assignment.op) {
                 .equals => rhs_value,
                 .minus_equals => blk: {
-                    const var_name_c = try self.cString(var_name);
-                    const current_val = llvm.core.LLVMBuildLoad2(self.builder, l.ty, l.ptr, var_name_c);
+                    const current_val = llvm.core.LLVMBuildLoad2(self.builder, lval.ty, lval.ptr, "loadtmp");
                     const new_val = llvm.core.LLVMBuildSub(self.builder, current_val, rhs_value, "subtmp");
                     break :blk new_val;
                 },
@@ -231,7 +482,7 @@ fn compileExpression(self: *Self, expr: ast.Expression) CompilerError!llvm.types
                 else => return error.UnsupportedExpression,
             };
 
-            _ = llvm.core.LLVMBuildStore(self.builder, final_value, l.ptr);
+            _ = llvm.core.LLVMBuildStore(self.builder, final_value, lval.ptr);
             return final_value;
         },
         .binary => |bin_expr| {
@@ -260,11 +511,16 @@ fn compileExpression(self: *Self, expr: ast.Expression) CompilerError!llvm.types
                 .shift_left => llvm.core.LLVMBuildShl(self.builder, lhs, rhs, "shltmp"),
                 .shift_right => llvm.core.LLVMBuildAShr(self.builder, lhs, rhs, "ashrtmp"),
 
-                else => error.UnsupportedExpression,
+                else => {
+                    std.debug.print("compileLValue: Unhandled expression type for LValue. Kind: {s}\n", .{@tagName(expr)});
+                    return error.UnsupportedExpression;
+                },
             };
         },
-        .range => |_| return error.UnsupportedExpression,
-        else => error.UnsupportedExpression,
+        else => {
+            std.debug.print("Unsupported expression type: {s}\n", .{@tagName(expr)});
+            return error.UnsupportedExpression;
+        },
     };
 }
 
@@ -408,18 +664,23 @@ fn compileIfStatement(self: *Self, if_stmt: ast.Statement.If) !void {
 
 fn compileType(self: *Self, ast_type: ast.Type) !llvm.types.LLVMTypeRef {
     return switch (ast_type) {
-        .symbol => |sym| if (std.mem.eql(u8, sym, "void"))
-            llvm.core.LLVMVoidTypeInContext(self.context)
-        else if (std.mem.eql(u8, sym, "i8"))
-            llvm.core.LLVMInt8TypeInContext(self.context)
-        else if (std.mem.eql(u8, sym, "i16"))
-            llvm.core.LLVMInt16TypeInContext(self.context)
-        else if (std.mem.eql(u8, sym, "i32"))
-            llvm.core.LLVMInt32TypeInContext(self.context)
-        else if (std.mem.eql(u8, sym, "i64"))
-            llvm.core.LLVMInt64TypeInContext(self.context)
-        else
-            error.UnsupportedType,
+        .self_type => {
+            return self.current_self_type orelse error.UnsupportedType;
+        },
+        .reference => |ref| llvm.core.LLVMPointerType(try self.compileType(ref.inner.*), 0),
+        .symbol => |sym| {
+            if (std.mem.eql(u8, sym, "void")) return llvm.core.LLVMVoidTypeInContext(self.context);
+            if (std.mem.eql(u8, sym, "i8")) return llvm.core.LLVMInt8TypeInContext(self.context);
+            if (std.mem.eql(u8, sym, "i16")) return llvm.core.LLVMInt16TypeInContext(self.context);
+            if (std.mem.eql(u8, sym, "i32")) return llvm.core.LLVMInt32TypeInContext(self.context);
+            if (std.mem.eql(u8, sym, "i64")) return llvm.core.LLVMInt64TypeInContext(self.context);
+
+            if (self.types.get(sym)) |user_type| {
+                return user_type.llvm_type;
+            }
+
+            return error.UnsupportedType;
+        },
         else => error.UnsupportedType,
     };
 }

@@ -1,25 +1,20 @@
-struct {
+struct MyStruct {
 	x: i32,
-	y: i32,
 
-	fn myMethod() void {
-
-	}
+    fn setX(self: &mut Self, new_x: i32) void {
+        self.x = new_x;
+    }
 }
 
-enum MyStruct {
-	A, B,
-
-	fn myMethod() void {
-
-	}
+fn foo() i32 {
+    return 42;
 }
 
-union MyUnion {
-	a: A,
-	b: B,
+fn main() void {
+	let mut s = MyStruct {
+		x: 1,
+	};
 
-	fn myMethod() void {
-
-	}
+    s.setX(10);
+    let val = foo();
 }

@@ -231,6 +231,7 @@ pub const Type = union(enum) {
     };
 
     inferred,
+    self_type,
     symbol: []const u8,
     optional: *const Type,
     reference: Reference,
