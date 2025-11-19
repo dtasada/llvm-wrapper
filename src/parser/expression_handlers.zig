@@ -122,10 +122,12 @@ pub fn parseGroupExpression(self: *Self) ParserError!ast.Expression {
 pub fn parseStructInstantiationExpression(self: *Self, lhs: *const ast.Expression, _: BindingPower) ParserError!ast.Expression {
     const struct_name = switch (lhs.*) {
         .ident => |ident| ident,
-        else => |other| {
-            utils.print("Parser: Expected struct name in struct instantiation, received {s}.", .{@tagName(other)}, .red);
-            return error.UnexpectedExpression;
-        },
+        else => |other| return utils.printErr(
+            error.UnexpectedExpression,
+            "Parser: Expected struct name in struct instantiation, received {s}.",
+            .{@tagName(other)},
+            .red,
+        ),
     };
 
     try self.expect(self.advance(), Lexer.Token.open_brace, "struct instantiation", "{");

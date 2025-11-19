@@ -203,8 +203,10 @@ inline fn getHandler(
         .bp => self.bp_lookup,
     }.get(token)) |handler| {
         return handler;
-    } else {
-        utils.print("TypeParser: {s} handler for '{}' does not exist.\n", .{ @tagName(handler_type), token }, .red);
-        return error.HandlerDoesNotExist;
-    }
+    } else return utils.printErr(
+        error.HandlerDoesNotExist,
+        "TypeParser: {s} handler for '{}' does not exist.\n",
+        .{ @tagName(handler_type), token },
+        .red,
+    );
 }

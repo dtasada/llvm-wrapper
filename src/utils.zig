@@ -9,10 +9,12 @@ pub const Position = struct {
     }
 };
 
+const Color = enum { white, red, green, blue, yellow };
+
 pub fn print(
     comptime fmt: []const u8,
     args: anytype,
-    comptime color: enum { white, red, green, blue, yellow },
+    comptime color: Color,
 ) void {
     var buf: [1024]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writer(&buf);
@@ -30,4 +32,14 @@ pub fn print(
     ) catch |err| std.debug.print("Couldn't stdout.print(): {}\n", .{err});
 
     stdout.flush() catch |err| std.debug.print("Couldn't stdout.flush(): {}\n", .{err});
+}
+
+pub inline fn printErr(
+    comptime err: anytype,
+    comptime fmt: []const u8,
+    args: anytype,
+    comptime color: Color,
+) @TypeOf(err) {
+    print(fmt, args, color);
+    return err;
 }

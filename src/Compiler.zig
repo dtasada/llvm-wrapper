@@ -19,6 +19,7 @@ pub const CompilerError = error{
     OutOfMemory,
     AssignmentToImmutableVariable,
     MemberExpressionOnPrimitiveType,
+    FailedToEmitObject,
 } || Parser.ParserError;
 
 const UserDefinedType = struct {
@@ -48,7 +49,7 @@ types: std.StringHashMap(*UserDefinedType),
 current_self_type: ?llvm.types.LLVMTypeRef = null,
 parser: *const Parser,
 
-pub fn init(alloc: std.mem.Allocator, parser: *const Parser) !*Self {
+pub fn init(alloc: std.mem.Allocator, parser: *const Parser) CompilerError!*Self {
     const self = try alloc.create(Self);
 
     const context = llvm.core.LLVMContextCreate();
@@ -137,13 +138,12 @@ pub fn emit(self: *Self) !void {
         .LLVMObjectFile,
         &err,
     ) != 0) {
-        utils.print("Failed to emit object file: {s}\n", .{err}, .red);
-        llvm.core.LLVMDisposeMessage(err); // Free if not null
-        return error.CompilerFailed;
+        defer llvm.core.LLVMDisposeMessage(err); // Free if not null
+        return utils.printErr(error.FailedToEmitObject, "Failed to emit object file: {s}\n", .{err}, .red);
     }
 }
 
-// helper functions
+//-- helper functions --
 
 /// finds variable in closest possible scope.
 fn findVariable(self: *const Self, name: []const u8) ?Symbol {
@@ -295,10 +295,13 @@ fn compileBlock(self: *Self, block: ast.Block) CompilerError!void {
 fn compileVariableDeclaration(self: *Self, statement: ast.Statement) CompilerError!void {
     const var_decl = statement.variable_declaration;
 
-    if (self.findVariable(var_decl.variable_name) != null) {
-        utils.print("Variable redeclaration at {f}\n", .{try self.parser.getStatementPos(statement)}, .red);
-        return error.VariableRedeclaration;
-    }
+    if (self.findVariable(var_decl.variable_name) != null)
+        return utils.printErr(
+            error.VariableRedeclaration,
+            "Variable redeclaration at {f}\n",
+            .{try self.parser.getStatementPos(statement)},
+            .red,
+        );
 
     const current_block = llvm.core.LLVMGetInsertBlock(self.builder);
     const current_fn = llvm.core.LLVMGetBasicBlockParent(current_block);
@@ -306,7 +309,13 @@ fn compileVariableDeclaration(self: *Self, statement: ast.Statement) CompilerErr
 
     switch (var_decl.assigned_value) {
         .struct_instantiation => |inst| {
-            const user_type = self.types.get(inst.name) orelse return error.UndeclaredType;
+            const user_type = self.types.get(inst.name) orelse
+                return utils.printErr(
+                    error.UndeclaredType,
+                    "Undeclared type at {f}\n",
+                    .{try self.parser.getExprPos(var_decl.assigned_value)},
+                    .red,
+                );
             const struct_type = user_type.llvm_type;
 
             const alloca = self.createEntryBlockAlloca(current_fn, struct_type, var_name);
@@ -339,7 +348,13 @@ const LValue = struct {
 
 fn compileLValue(self: *Self, expr: ast.Expression) !LValue {
     return switch (expr) {
-        .ident => |ident| switch (self.findVariable(ident) orelse return error.UndeclaredVariable) {
+        .ident => |ident| switch (self.findVariable(ident) orelse
+            return utils.printErr(
+                error.UndeclaredVariable,
+                "Undeclared variable at {f}\n",
+                .{try self.parser.getExprPos(expr)},
+                .red,
+            )) {
             .local => |l| .{ .ptr = l.ptr, .ty = l.ty, .is_mut = l.is_mut },
             .parameter => |p| .{ .ptr = p.val, .ty = p.ty, .is_mut = p.is_mut },
         },
@@ -456,7 +471,7 @@ fn compileCallExpression(self: *Self, call_expr: ast.Expression.Call) !llvm.type
         try compiled_args.append(self.alloc, try self.compileExpression(arg));
     }
 
-    switch (call_expr.callee.*) {
+    (switch (call_expr.callee.*) {
         .member => |member_expr| {
             // Method Call
             const lhs = member_expr.lhs.*;
@@ -550,7 +565,15 @@ fn compileCallExpression(self: *Self, call_expr: ast.Expression.Call) !llvm.type
             return llvm.core.LLVMBuildCall2(self.builder, fn_type, func_to_call, compiled_args.items.ptr, cUint(compiled_args.items.len), "calltmp");
         },
         else => return error.UnsupportedExpression,
-    }
+    }) catch |err| switch (err) {
+        error.UndeclaredVariable => return utils.printErr(
+            err,
+            "Undeclared variable at {f}\n",
+            .{try self.parser.getExprPos(call_expr.callee.*)},
+            .red,
+        ),
+        else => return err,
+    };
 }
 
 fn compileExpression(self: *Self, expr: ast.Expression) CompilerError!llvm.types.LLVMValueRef {
@@ -563,7 +586,12 @@ fn compileExpression(self: *Self, expr: ast.Expression) CompilerError!llvm.types
             return llvm.core.LLVMConstInt(i32_type, uint, 0);
         },
         .ident => |ident| {
-            const symbol = self.findVariable(ident) orelse return error.UndeclaredVariable;
+            const symbol = self.findVariable(ident) orelse return utils.printErr(
+                error.UndeclaredVariable,
+                "Undeclared variable at {f}\n",
+                .{try self.parser.getExprPos(expr)},
+                .red,
+            );
             return switch (symbol) {
                 .parameter => |p| p.val,
                 .local => |l| {
@@ -620,16 +648,20 @@ fn compileExpression(self: *Self, expr: ast.Expression) CompilerError!llvm.types
                 .shift_left => llvm.core.LLVMBuildShl(self.builder, lhs, rhs, "shltmp"),
                 .shift_right => llvm.core.LLVMBuildAShr(self.builder, lhs, rhs, "ashrtmp"),
 
-                else => {
-                    std.debug.print("compileLValue: Unhandled expression type for LValue. Kind: {s}\n", .{@tagName(expr)});
-                    return error.UnsupportedExpression;
-                },
+                else => return utils.printErr(
+                    error.UnsupportedExpression,
+                    "compileLValue: Unhandled expression type for LValue. Kind: {s}\n",
+                    .{@tagName(expr)},
+                    .red,
+                ),
             };
         },
-        else => {
-            std.debug.print("Unsupported expression type: {s}\n", .{@tagName(expr)});
-            return error.UnsupportedExpression;
-        },
+        else => return utils.printErr(
+            error.UnsupportedExpression,
+            "Unsupported expression type: {s}\n",
+            .{@tagName(expr)},
+            .red,
+        ),
     };
 }
 

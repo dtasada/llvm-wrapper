@@ -297,7 +297,8 @@ pub fn unexpectedToken(
 ) error{ NoSpaceLeft, UnexpectedToken } {
     const pos = std.math.clamp(self.pos - 1, 0, self.lexer.source_map.items.len - 1);
 
-    utils.print(
+    return utils.printErr(
+        error.UnexpectedToken,
         "Unexpected token '{f}' in {s} at {f}. Expected '{s}'\n",
         .{
             actual,
@@ -307,7 +308,6 @@ pub fn unexpectedToken(
         },
         .red,
     );
-    return error.UnexpectedToken;
 }
 
 /// Returns active tag if active type of `actual` is the same as `expected`. Errors otherwise.
@@ -357,11 +357,12 @@ pub inline fn getHandler(
         .bp => self.bp_lookup,
     }.get(token)) |handler| {
         return handler;
-    } else {
-        utils.print("Parser: {s} handler for '{}' does not exist.\n", .{ @tagName(handler_type), token }, .red);
-
-        return error.HandlerDoesNotExist;
-    }
+    } else return utils.printErr(
+        error.HandlerDoesNotExist,
+        "Parser: {s} handler for '{}' does not exist.\n",
+        .{ @tagName(handler_type), token },
+        .red,
+    );
 }
 
 /// parses parameters and returns `!Node.ParameterList`. Caller is responsible for cleanup.
