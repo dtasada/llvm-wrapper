@@ -24,8 +24,8 @@ fn main() i32 {
 
     let c = 420;
 
-    if (c > 69) {
-        c += 67;
+    for (-4..4) |i| {
+        c += i;
     }
 
     // let c = a.add(b);

@@ -176,7 +176,6 @@ pub fn init(input: *const Lexer, alloc: std.mem.Allocator) !*Self {
     // logical
     try self.led(Lexer.Token.@"and", .logical, expression_handlers.parseBinaryExpression);
     try self.led(Lexer.Token.@"or", .logical, expression_handlers.parseBinaryExpression);
-    try self.led(Lexer.Token.dot_dot, .logical, expression_handlers.parseBinaryExpression);
 
     // relational
     try self.led(Lexer.Token.less, .relational, expression_handlers.parseBinaryExpression);

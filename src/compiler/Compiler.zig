@@ -91,12 +91,12 @@ pub fn deinit(self: *Self) void {
 
 /// Entry point for the compiler. Compiles AST into C code.
 pub fn emit(self: *Self) CompilerError!void {
-    for (self.parser.output.items) |statement|
+    for (self.parser.output.items) |*statement|
         try self.compileStatement(statement);
 }
 
-fn compileStatement(self: *Self, statement: ast.Statement) CompilerError!void {
-    switch (statement) {
+fn compileStatement(self: *Self, statement: *const ast.Statement) CompilerError!void {
+    switch (statement.*) {
         .function_definition => |fn_def| try self.compileFunctionDefinition(fn_def),
         .struct_declaration => |struct_decl| try self.compileStructDeclaration(struct_decl),
         .@"return" => |return_expr| try self.compileReturnStatement(return_expr),
@@ -106,10 +106,10 @@ fn compileStatement(self: *Self, statement: ast.Statement) CompilerError!void {
             try self.writeBytes(";\n");
         },
         .@"if" => |if_stmt| try self.compileIfStatement(if_stmt),
-        // .@"while" => |while_stmt| try self.compileWhileStatement(while_stmt),
-        // .@"for" => |for_stmt| try self.compileForStatement(for_stmt),
+        .@"while" => |while_stmt| try self.compileWhileStatement(while_stmt),
+        .@"for" => |for_stmt| try self.compileForStatement(for_stmt),
         .block => |block| try self.compileBlock(block),
-        else => std.debug.print("unimplemented statement {s}\n", .{@tagName(statement)}), // TODO: implement all statement types
+        else => |other| std.debug.print("unimplemented statement {s}\n", .{@tagName(other)}), // TODO: implement all statement types
     }
 
     try self.output_writer.interface.flush();
@@ -164,12 +164,42 @@ fn compileIfStatement(self: *Self, if_statement: ast.Statement.If) CompilerError
     try self.compileExpression(if_statement.condition);
     try self.writeBytes(") ");
 
-    try self.compileStatement(if_statement.body.*);
+    try self.compileStatement(if_statement.body);
     if (if_statement.capture) |_|
         std.debug.print("unimplemented if statement capture\n", .{});
 
     if (if_statement.@"else") |@"else"|
-        try self.compileStatement(@"else".*);
+        try self.compileStatement(@"else");
+}
+
+fn compileWhileStatement(self: *Self, while_statement: ast.Statement.While) CompilerError!void {
+    try self.writeBytes("while (");
+    try self.compileExpression(while_statement.condition);
+    try self.writeBytes(") ");
+
+    try self.compileStatement(while_statement.body);
+    if (while_statement.capture) |_|
+        std.debug.print("unimplemented while statement capture\n", .{});
+}
+
+fn compileForStatement(self: *Self, for_statement: ast.Statement.For) CompilerError!void {
+    try self.writeBytes("for (");
+    try self.write("int32_t {s} = ", .{for_statement.capture});
+    switch (for_statement.iterator.*) {
+        .range => |range| {
+            try self.compileExpression(range.start);
+            try self.write("; {s} < ", .{for_statement.capture});
+            try self.compileExpression(range.end);
+            try self.write("; {s}++", .{for_statement.capture});
+        },
+        else => |other| switch (try self.inferType(other)) {
+            .array => std.debug.print("unimplemented array iterator in for loop\n", .{}),
+            else => std.debug.print("illegal array iterator type\n", .{}),
+        },
+    }
+    try self.writeBytes(") ");
+
+    try self.compileStatement(for_statement.body);
 }
 
 fn compileBlock(self: *Self, block: ast.Block) CompilerError!void {
@@ -179,7 +209,7 @@ fn compileBlock(self: *Self, block: ast.Block) CompilerError!void {
     try self.writeBytes("{\n");
 
     self.indent_level += 1;
-    for (block.items) |statement| {
+    for (block.items) |*statement| {
         try self.writeIndent();
         try self.compileStatement(statement);
     }
@@ -210,6 +240,7 @@ fn inferType(self: *Self, expr: ast.Expression) !ast.Type {
         .struct_instantiation => |struct_inst| .{
             .symbol = try self.compileType(try self.getSymbolType(struct_inst.name)),
         },
+        .prefix => |prefix| try self.inferType(prefix.rhs.*),
         else => |other| std.debug.panic("unimplemented type: {s}\n", .{@tagName(other)}),
     };
 }
@@ -346,6 +377,7 @@ fn compileExpression(self: *Self, expression: *const ast.Expression) CompilerErr
             try self.writeIndent();
             try self.writeBytes("}");
         },
+        .range => std.debug.print("illegal range expression\n", .{}),
         else => |other| std.debug.print("unimplemented expression {s}\n", .{@tagName(other)}),
     }
 }
