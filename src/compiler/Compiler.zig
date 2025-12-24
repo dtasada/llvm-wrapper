@@ -34,7 +34,11 @@ indent_level: usize = 0,
 scopes: std.ArrayList(Scope) = .empty,
 
 /// maps a symbol name to the symbol's type
-const Scope = std.StringHashMap(ast.Type);
+const Scope = std.StringHashMap(ScopeItem);
+const ScopeItem = struct {
+    type: ast.Type,
+    inner_name: []const u8,
+};
 
 pub fn init(alloc: std.mem.Allocator, parser: *const Parser, file_path: []const u8) !*Self {
     const self = try alloc.create(Self);
@@ -97,8 +101,11 @@ fn compileStatement(self: *Self, statement: ast.Statement) CompilerError!void {
         .struct_declaration => |struct_decl| try self.compileStructDeclaration(struct_decl),
         .@"return" => |return_expr| try self.compileReturnStatement(return_expr),
         .variable_definition => |var_decl| try self.compileVariableDefinition(var_decl),
-        .expression => |*expr| _ = try self.compileExpression(expr),
-        // .@"if" => |if_stmt| try self.compileIfStatement(if_stmt),
+        .expression => |*expr| {
+            try self.compileExpression(expr);
+            try self.writeBytes(";\n");
+        },
+        .@"if" => |if_stmt| try self.compileIfStatement(if_stmt),
         // .@"while" => |while_stmt| try self.compileWhileStatement(while_stmt),
         // .@"for" => |for_stmt| try self.compileForStatement(for_stmt),
         .block => |block| try self.compileBlock(block),
@@ -120,12 +127,22 @@ fn compileStructDeclaration(self: *Self, struct_decl: ast.Statement.StructDeclar
         try self.writeBytes(";\n");
     }
 
-    if (struct_decl.methods.items.len != 0) {
-        std.debug.print("unimplemented type: struct method\n", .{});
-    }
-
     self.indent_level -= 1;
     try self.write("}};\n\n", .{});
+
+    for (struct_decl.methods.items) |method| {
+        try self.registerSymbol(method.name, .{ .function = method.getType() });
+
+        try self.write("{s}", .{try self.compileType(method.return_type)});
+        try self.write(" __dmr_{s}_{s}(", .{ struct_decl.name, method.name }); // TODO: generics
+        for (method.parameters.items, 1..) |parameter, i| {
+            try self.compileVariableSignature(parameter.name, parameter.type);
+            if (i < method.parameters.items.len) try self.writeBytes(", ");
+        }
+        try self.writeBytes(") ");
+
+        try self.compileBlock(method.body);
+    }
 }
 
 fn compileFunctionDefinition(self: *Self, function_def: ast.FunctionDefinition) CompilerError!void {
@@ -142,6 +159,19 @@ fn compileFunctionDefinition(self: *Self, function_def: ast.FunctionDefinition) 
     try self.compileBlock(function_def.body);
 }
 
+fn compileIfStatement(self: *Self, if_statement: ast.Statement.If) CompilerError!void {
+    try self.writeBytes("if (");
+    try self.compileExpression(if_statement.condition);
+    try self.writeBytes(") ");
+
+    try self.compileStatement(if_statement.body.*);
+    if (if_statement.capture) |_|
+        std.debug.print("unimplemented if statement capture\n", .{});
+
+    if (if_statement.@"else") |@"else"|
+        try self.compileStatement(@"else".*);
+}
+
 fn compileBlock(self: *Self, block: ast.Block) CompilerError!void {
     try self.pushScope();
     defer self.popScope();
@@ -155,14 +185,18 @@ fn compileBlock(self: *Self, block: ast.Block) CompilerError!void {
     }
     self.indent_level -= 1;
 
+    try self.writeIndent();
     try self.writeBytes("}\n\n");
 }
 
 /// prints the type to the file
 fn compileType(self: *Self, t: ast.Type) CompilerError![]const u8 {
-    _ = self;
     return switch (t) {
         .symbol => |symbol| types.get(symbol) catch symbol,
+        .reference => |reference| try std.fmt.allocPrint(self.alloc, "{s}{s} *", .{
+            if (reference.is_mut) "" else "const ",
+            try self.compileType(reference.inner.*),
+        }),
         else => |other| std.debug.panic("unimplemented type {s}\n", .{@tagName(other)}),
     };
 }
@@ -170,7 +204,7 @@ fn compileType(self: *Self, t: ast.Type) CompilerError![]const u8 {
 fn inferType(self: *Self, expr: ast.Expression) !ast.Type {
     return switch (expr) {
         .ident => |ident| .{ .symbol = ident },
-        .int => .{ .symbol = "i32" },
+        .int, .uint => .{ .symbol = "i32" },
         .float => .{ .symbol = "f32" },
         .char => .{ .symbol = "u8" },
         .struct_instantiation => |struct_inst| .{
@@ -181,8 +215,19 @@ fn inferType(self: *Self, expr: ast.Expression) !ast.Type {
 }
 
 fn compileVariableSignature(self: *Self, name: []const u8, @"type": ast.Type) CompilerError!void {
-    try self.write("{s}", .{try self.compileType(@"type")});
-    try self.write(" {s}", .{name});
+    switch (@"type") {
+        .array => |array| {
+            if (array.size) |size| {
+                try self.write("{s} {s}[", .{ try self.compileType(array.inner.*), name });
+                try self.compileExpression(size);
+                try self.write("]", .{});
+            }
+        },
+        else => {
+            try self.write("{s} ", .{try self.compileType(@"type")});
+            try self.write("{s}", .{name});
+        },
+    }
 }
 
 fn compileVariableDefinition(self: *Self, v: ast.Statement.VariableDefinition) CompilerError!void {
@@ -217,7 +262,7 @@ fn compileExpression(self: *Self, expression: *const ast.Expression) CompilerErr
     switch (expression.*) {
         .assignment => |assignment| {
             try self.compileExpression(assignment.assignee);
-            try self.writeBytes(switch (assignment.op) {
+            try self.write(" {s} ", .{switch (assignment.op) {
                 .and_equals => "&=",
                 .minus_equals => "-=",
                 .mod_equals => "%=",
@@ -229,13 +274,13 @@ fn compileExpression(self: *Self, expression: *const ast.Expression) CompilerErr
                 .times_equals => "*=",
                 .xor_equals => "^=",
                 .equals => "=",
-            });
+            }});
             try self.compileExpression(assignment.value);
         },
         .block => |block| try self.compileBlock(block),
         .binary => |binary| {
             try self.compileExpression(binary.lhs);
-            try self.writeBytes(switch (binary.op) {
+            try self.write(" {s} ", .{switch (binary.op) {
                 .plus => "+",
                 .dash => "-",
                 .asterisk => "*",
@@ -256,7 +301,7 @@ fn compileExpression(self: *Self, expression: *const ast.Expression) CompilerErr
                 .logical_or => "||",
                 .shift_right => ">>",
                 .shift_left => "<<",
-            });
+            }});
             try self.compileExpression(binary.rhs);
         },
         .float => |float| try self.write("{}", .{float}),
@@ -319,14 +364,17 @@ fn popScope(self: *Self) void {
 /// registers a new entry in the top scope of the scope stack.
 fn registerSymbol(self: *Self, name: []const u8, @"type": ast.Type) !void {
     var last = &self.scopes.items[self.scopes.items.len - 1];
-    try last.put(name, @"type");
+    try last.put(name, .{
+        .type = @"type",
+        .inner_name = name, // TODO: name mangling for generics ig
+    });
 }
 
 fn getSymbolType(self: *const Self, symbol: []const u8) !ast.Type {
     var it = std.mem.reverseIterator(self.scopes.items);
     while (it.next()) |scope|
-        return scope.get(symbol) orelse
-            continue;
+        return (scope.get(symbol) orelse
+            continue).type;
 
     return error.UnknownSymbol;
 }
