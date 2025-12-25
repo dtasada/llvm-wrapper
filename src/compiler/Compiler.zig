@@ -131,13 +131,13 @@ const Type = union(enum) {
 pub fn init(alloc: std.mem.Allocator, parser: *const Parser, file_path: []const u8) !*Self {
     const self = try alloc.create(Self);
 
-    const out_path = try std.fs.path.join(alloc, &.{ ".dmr-out", std.fs.path.dirname(file_path) orelse "" });
-    var dmr_out = try std.fs.cwd().makeOpenPath(out_path, .{});
-    defer dmr_out.close();
+    const out_path = try std.fs.path.join(alloc, &.{ ".zag-out", std.fs.path.dirname(file_path) orelse "" });
+    var zag_out = try std.fs.cwd().makeOpenPath(out_path, .{});
+    defer zag_out.close();
 
     const out_file_path = try std.fmt.allocPrint(alloc, "{s}.c", .{std.fs.path.basename(file_path)});
     defer alloc.free(out_file_path);
-    const output_file = try dmr_out.createFile(out_file_path, .{});
+    const output_file = try zag_out.createFile(out_file_path, .{});
 
     self.* = .{
         .alloc = alloc,
@@ -264,7 +264,7 @@ fn compileStructDeclaration(
         defer self.popScope();
 
         try self.write("{s}", .{try self.compileTypeAst(method.return_type)});
-        try self.write(" __dmr_{s}_{s}(", .{ struct_decl.name, method.name }); // TODO: generics
+        try self.write(" __zag_{s}_{s}(", .{ struct_decl.name, method.name }); // TODO: generics
         for (method.parameters.items, 1..) |parameter, i| {
             const parameter_type = try self.getTypeFromAst(.{ .strong = parameter.type });
             try self.registerSymbol(parameter.name, parameter_type, .symbol);

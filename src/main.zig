@@ -20,7 +20,7 @@ const BuildError = error{
 };
 
 fn build(alloc: std.mem.Allocator) !void {
-    const file_path = try std.fs.path.join(alloc, &.{ "src", "main.dmr" });
+    const file_path = try std.fs.path.join(alloc, &.{ "src", "main.zag" });
     defer alloc.free(file_path);
 
     var buf: [65535]u8 = undefined;

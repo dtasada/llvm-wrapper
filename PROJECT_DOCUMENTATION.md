@@ -1,6 +1,6 @@
 # LLVM-Wrapper Project Documentation
 
-This document provides a detailed explanation of the `llvm-wrapper` project, a compiler for a custom language with the `.dmr` file extension. The compiler is written in Zig and uses LLVM for code generation.
+This document provides a detailed explanation of the `llvm-wrapper` project, a compiler for a custom language with the `.zag` file extension. The compiler is written in Zig and uses LLVM for code generation.
 
 ## Project Structure
 
@@ -35,7 +35,7 @@ The `build` function in `src/main.zig` orchestrates the entire compilation pipel
 4.  It parses the tokens into an AST using the `Parser.parse()` method.
 5.  It initializes the `Compiler` with the AST.
 6.  It compiles the AST into LLVM IR using the `Compiler.emit()` method.
-7.  The generated LLVM IR is then written to an object file in the `.dmr-out` directory.
+7.  The generated LLVM IR is then written to an object file in the `.zag-out` directory.
 
 ### 2. Lexical Analysis (`src/Lexer.zig`)
 
@@ -80,7 +80,7 @@ The `Compiler` is the final stage of the compilation pipeline. It traverses the 
 
 -   **Method Calls**: Method calls are implemented by mangling the function name (e.g., `__MANGLE_StructName_methodName`) and passing the struct instance as the first argument to the function.
 
--   **Object File Emission**: Finally, the compiler uses the LLVM TargetMachine to emit a final object file (`.dmr-out/main.o`).
+-   **Object File Emission**: Finally, the compiler uses the LLVM TargetMachine to emit a final object file (`.zag-out/main.o`).
 
 ## Build Process (`build.zig`)
 

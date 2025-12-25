@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
-        .name = "dmr",
+        .name = "zag",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const exe_check = b.addExecutable(.{
-        .name = "dmr",
+        .name = "zag",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -58,6 +58,6 @@ pub fn build(b: *std.Build) void {
     exe_check.root_module.addImport("llvm", llvm_mod);
     exe_check.root_module.addImport("clang", clang_mod);
 
-    const check = b.step("check", "Check if dmr compiles");
+    const check = b.step("check", "Check if zag compiles");
     check.dependOn(&exe_check.step);
 }

@@ -1,6 +1,6 @@
 .{
-    .fingerprint = 0xdec7bf14a89f25f8,
-    .name = .dmr,
+    .fingerprint = 0x9179a892ff770a2,
+    .name = .zag,
     .version = "0.0.0",
     .minimum_zig_version = "0.15.1",
     .dependencies = .{
