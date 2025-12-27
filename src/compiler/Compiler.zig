@@ -23,14 +23,42 @@ pub const CompilerError = error{
 alloc: std.mem.Allocator,
 parser: *const Parser,
 
-output_file: std.fs.File,
-output_writer: std.fs.File.Writer,
-output_buf: [1024]u8 = undefined,
+output: File,
+zag_header: File,
 
 indent_level: usize = 0,
 
 /// stack of scopes.
 scopes: std.ArrayList(Scope) = .empty,
+
+const File = struct {
+    handler: std.fs.File,
+    writer: std.fs.File.Writer,
+    buf: []u8,
+
+    fn init(alloc: std.mem.Allocator, file: std.fs.File) !File {
+        var self: File = .{
+            .handler = file,
+            .buf = try alloc.alloc(u8, 1024),
+            .writer = undefined,
+        };
+        self.writer = self.handler.writer(self.buf);
+        return self;
+    }
+
+    fn deinit(self: *File, alloc: std.mem.Allocator) void {
+        self.handler.close();
+        alloc.free(self.buf);
+    }
+
+    fn write(self: *File, bytes: []const u8) !void {
+        _ = try self.writer.interface.write(bytes);
+    }
+
+    fn flush(self: *File) !void {
+        try self.writer.interface.flush();
+    }
+};
 
 /// maps a symbol name to the symbol's type
 const Scope = std.StringHashMap(union(enum) {
@@ -49,27 +77,20 @@ const Type = union(enum) {
         return_type: *const Type,
     };
 
-    const Struct = struct {
-        const Member = struct {
+    fn CompoundType(T: enum { @"struct", @"enum", @"union" }) type {
+        return struct {
             name: []const u8,
-            type: *const Type,
+            members: std.StringHashMap(switch (T) {
+                .@"struct", .@"union" => *const Type,
+                .@"enum" => ?usize,
+            }),
+            methods: std.StringHashMap(Function),
         };
+    }
 
-        name: []const u8,
-        members: std.ArrayList(Member),
-        methods: std.ArrayList(Function),
-    };
-
-    const Enum = struct {
-        const Member = struct {
-            name: []const u8,
-            value: ?usize,
-        };
-
-        name: []const u8,
-        members: std.ArrayList(Member),
-        methods: std.ArrayList(Function),
-    };
+    const Struct = CompoundType(.@"struct");
+    const Union = CompoundType(.@"union");
+    const Enum = CompoundType(.@"enum");
 
     const Reference = struct {
         inner: *const Type,
@@ -108,6 +129,7 @@ const Type = union(enum) {
 
     @"struct": Struct,
     @"enum": Enum,
+    @"union": Union,
     optional: *const Type,
     reference: Reference,
     array: Array,
@@ -144,34 +166,105 @@ const Type = union(enum) {
     }
 };
 
-const Value = struct {
-    value: *const Value,
-    type: union(enum) {
-        i8: i8,
-        i16: i16,
-        i32: i32,
-        i64: i64,
+const Value = union(enum) {
+    i8: i8,
+    i16: i16,
+    i32: i32,
+    i64: i64,
 
-        u8: u8,
-        u16: u16,
-        u32: u32,
-        u64: u64,
+    u8: u8,
+    u16: u16,
+    u32: u32,
+    u64: u64,
 
-        f32: f32,
-        f64: f64,
+    f32: f32,
+    f64: f64,
 
-        bool: bool,
+    bool: bool,
 
-        void,
+    void,
 
-        @"struct": struct { value: *const Value, type: Type.Struct },
-        @"enum": struct { value: *const Value, type: Type.Enum },
-        optional: struct { value: *const Value, type: *const Type },
-        reference: struct { value: *const Value, type: Type.Reference },
-        array: struct { value: *const Value, type: Type.Array },
-        error_union: struct { value: *const Value, type: Type.ErrorUnion },
-        function: struct { value: *const Value, type: Type.Function },
+    @"struct": CompoundType(.@"struct"),
+    @"enum": CompoundType(.@"enum"),
+    @"union": CompoundType(.@"union"),
+    optional: struct {
+        type: Type,
+        value: *const Value,
     },
+    reference: struct { value: *const Value, type: Type.Reference },
+    array: struct { value: *const Value, type: Type.Array },
+    error_union: struct { value: *const Value, type: Type.ErrorUnion },
+    function: struct { value: *const Value, type: Type.Function },
+
+    fn CompoundType(compound_type: enum { @"struct", @"union", @"enum" }) type {
+        return struct {
+            type: switch (compound_type) {
+                .@"struct" => Type.Struct,
+                .@"union" => Type.Union,
+                .@"enum" => Type.Enum,
+            },
+            members: std.StringHashMap(*const Value),
+            methods: std.StringHashMap(*const Value),
+        };
+    }
+
+    pub fn binaryOperation(lhs: Value, op: ast.BinaryOperator, rhs: Value) !Value {
+        if (std.meta.activeTag(lhs) != std.meta.activeTag(rhs))
+            @panic("invalid binary operation: the two values are not of the same type\n");
+
+        const switch_fn = (struct {
+            fn switchFn(inner_lhs: anytype, inner_op: ast.BinaryOperator, inner_rhs: anytype) !Value {
+                return switch (inner_op) {
+                    .plus => inner_lhs + inner_rhs,
+                    .dash => inner_lhs - inner_rhs,
+                    .asterisk => inner_lhs * inner_rhs,
+                    .slash => @divTrunc(inner_lhs, inner_rhs),
+                    .percent => @mod(inner_lhs, inner_rhs),
+
+                    .equals_equals => inner_lhs == inner_rhs,
+                    .greater => inner_lhs > inner_rhs,
+                    .less => inner_lhs < inner_rhs,
+                    .greater_equals => inner_lhs >= inner_rhs,
+                    .less_equals => inner_lhs <= inner_rhs,
+                    .bang_equals => inner_lhs != inner_rhs,
+
+                    .ampersand => inner_lhs & inner_rhs,
+                    .pipe => inner_lhs | inner_rhs,
+                    .caret => inner_lhs ^ inner_rhs,
+                    .logical_and => inner_lhs and inner_rhs,
+                    .logical_or => inner_lhs or inner_rhs,
+                    .shift_right => inner_lhs >> inner_rhs,
+                    .shift_left => inner_lhs << inner_rhs,
+                };
+            }
+        }).switchFn;
+
+        const result = switch (lhs) {
+            .i64, .i32, .i16, .i8 => |lhs_int| switch (rhs) {
+                .i64, .i32, .i16, .i8 => |rhs_int| try switch_fn(lhs_int, op, rhs_int),
+                else => @panic("invalid binary operation: the two values are not of numeric boolean type\n"),
+            },
+            .u64, .u32, .u16, .u8 => |lhs_uint| switch (rhs) {
+                .u64, .u32, .u16, .u8 => |rhs_uint| try switch_fn(lhs_uint, op, rhs_uint),
+                else => @panic("invalid binary operation: the two values are not of numeric boolean type\n"),
+            },
+            .f64, .f32 => |lhs_float| switch (rhs) {
+                .f64, .f32 => |rhs_float| try switch_fn(lhs_float, op, rhs_float),
+                else => @panic("invalid binary operation: the two values are not of numeric boolean type\n"),
+            },
+            .bool => |lhs_bool| switch (rhs) {
+                .bool => |rhs_bool| try switch_fn(lhs_bool, op, rhs_bool),
+                else => @panic("invalid binary operation: the two values are not of numeric or boolean type\n"),
+            },
+            else => @panic("invalid binary operation: the two values are not of numeric or boolean type\n"),
+        };
+
+        return switch (lhs) {
+            .i64 => .{ .i64 = result },
+            .u64 => .{ .u64 = result },
+            .f64 => .{ .f64 = result },
+        };
+    }
 };
 
 pub fn init(alloc: std.mem.Allocator, parser: *const Parser, file_path: []const u8) !*Self {
@@ -185,17 +278,33 @@ pub fn init(alloc: std.mem.Allocator, parser: *const Parser, file_path: []const 
     defer alloc.free(out_file_path);
     const output_file = try zag_out.createFile(out_file_path, .{});
 
+    const zag_header_path = try std.fmt.allocPrint(alloc, "zag.h", .{});
+    defer alloc.free(zag_header_path);
+    const zag_header_file = try zag_out.createFile(zag_header_path, .{});
+
     self.* = .{
         .alloc = alloc,
         .parser = parser,
 
-        .output_file = output_file,
-        .output_writer = output_file.writer(&self.output_buf),
+        .output = try .init(alloc, output_file),
+        .zag_header = try .init(alloc, zag_header_file),
     };
 
     try self.pushScope();
 
     return self;
+}
+
+pub fn deinit(self: *Self) void {
+    self.output.deinit(self.alloc);
+    self.zag_header.deinit(self.alloc);
+
+    self.popScope();
+    // there should be no more scopes left
+    std.debug.assert(self.scopes.items.len == 0);
+
+    for (self.scopes.items) |*scope| scope.deinit();
+    self.scopes.deinit(self.alloc);
 }
 
 fn print(
@@ -217,17 +326,6 @@ inline fn indent(self: *Self, file: *std.ArrayList(u8)) CompilerError!void {
         try file.appendSlice(self.alloc, "    ");
 }
 
-pub fn deinit(self: *Self) void {
-    self.output_file.close();
-
-    self.popScope();
-    // there should be no more scopes left
-    std.debug.assert(self.scopes.items.len == 0);
-
-    for (self.scopes.items) |*scope| scope.deinit();
-    self.scopes.deinit(self.alloc);
-}
-
 /// Entry point for the compiler. Compiles AST into C code.
 pub fn emit(self: *Self) CompilerError!void {
     var file_writer: std.ArrayList(u8) = .empty;
@@ -237,8 +335,8 @@ pub fn emit(self: *Self) CompilerError!void {
     for (self.parser.output.items) |*statement|
         try self.compileStatement(&file_writer, statement);
 
-    _ = try self.output_writer.interface.write(file_writer.items);
-    try self.output_writer.interface.flush();
+    try self.output.write(file_writer.items);
+    try self.output.flush();
 }
 
 fn compileStatement(
@@ -248,7 +346,7 @@ fn compileStatement(
 ) CompilerError!void {
     switch (statement.*) {
         .function_definition => |fn_def| try self.compileFunctionDefinition(file_writer, fn_def),
-        .struct_declaration => |struct_decl| try self.compileStructDeclaration(file_writer, struct_decl),
+        .struct_declaration => |struct_decl| try self.compileCompoundTypeDeclaration(file_writer, .@"struct", struct_decl),
         .@"return" => |return_expr| try self.compileReturnStatement(file_writer, return_expr),
         .variable_definition => |var_decl| try self.compileVariableDefinition(file_writer, var_decl),
         .expression => |*expr| {
@@ -260,33 +358,51 @@ fn compileStatement(
         .@"for" => |for_stmt| try self.compileForStatement(file_writer, for_stmt),
         .block => |block| try self.compileBlock(file_writer, block),
         .enum_declaration => |enum_decl| try self.compileEnumDeclaration(file_writer, enum_decl),
-        else => |other| std.debug.print("unimplemented statement {s}\n", .{@tagName(other)}), // TODO: implement all statement types
+        .union_declaration => |union_decl| try self.compileCompoundTypeDeclaration(file_writer, .@"union", union_decl),
     }
 }
 
-fn compileStructDeclaration(
+fn compileCompoundTypeDeclaration(
     self: *Self,
     file_writer: *std.ArrayList(u8),
-    struct_decl: ast.Statement.StructDeclaration,
+    comptime T: enum { @"struct", @"union" },
+    type_decl: switch (T) {
+        .@"struct" => ast.Statement.StructDeclaration,
+        .@"union" => ast.Statement.UnionDeclaration,
+    },
 ) CompilerError!void {
     // register struct in scope
-    var struct_: Type.Struct = .{
-        .name = struct_decl.name,
-        .members = try .initCapacity(self.alloc, struct_decl.members.items.len),
-        .methods = try .initCapacity(self.alloc, struct_decl.methods.items.len),
+    var compound_type: switch (T) {
+        .@"struct" => Type.Struct,
+        .@"union" => Type.Union,
+    } = .{
+        .name = type_decl.name,
+        .members = .init(self.alloc),
+        .methods = .init(self.alloc),
     };
-    try self.registerSymbol(struct_decl.name, .{ .@"struct" = struct_ }, .type);
-    for (struct_decl.members.items) |member| {
+    try self.registerSymbol(
+        type_decl.name,
+        switch (T) {
+            .@"struct" => .{ .@"struct" = compound_type },
+            .@"union" => .{ .@"union" = compound_type },
+        },
+        .type,
+    );
+    for (type_decl.members.items) |member| {
         // TODO: struct default values
         const member_type = try self.alloc.create(Type);
-        member_type.* = try self.getTypeFromAst(.{ .strong = member.type });
-        struct_.members.appendAssumeCapacity(.{
-            .name = member.name,
-            .type = member_type,
-        });
+        member_type.* = switch (T) {
+            .@"struct" => try self.getTypeFromAst(.{ .strong = member.type }),
+            .@"union" => if (member.type) |t|
+                try self.getTypeFromAst(.{ .strong = t })
+            else
+                .void,
+        };
+
+        try compound_type.members.put(member.name, member_type);
     }
 
-    for (struct_decl.methods.items) |method| {
+    for (type_decl.methods.items) |method| {
         var params: std.ArrayList(*const Type) = try .initCapacity(
             self.alloc,
             method.parameters.items.len,
@@ -300,35 +416,47 @@ fn compileStructDeclaration(
 
         const return_type = try self.alloc.create(Type);
         return_type.* = try self.getTypeFromAst(.{ .strong = method.return_type });
-        struct_.methods.appendAssumeCapacity(.{
+        try compound_type.methods.put(method.name, .{
             .params = params,
             .return_type = return_type,
         });
     }
 
-    try self.write(file_writer, "typedef struct {\n");
+    try self.write(
+        file_writer,
+        "typedef " ++ switch (T) {
+            .@"struct" => "struct",
+            .@"union" => "union",
+        } ++ " {\n",
+    );
     self.indent_level += 1;
 
-    for (struct_decl.members.items) |member| {
+    for (type_decl.members.items) |member| {
         try self.indent(file_writer);
         try self.compileVariableSignature(
             file_writer,
             member.name,
-            try self.getTypeFromAst(.{ .strong = member.type }),
+            switch (T) {
+                .@"struct" => try self.getTypeFromAst(.{ .strong = member.type }),
+                .@"union" => if (member.type) |t|
+                    try self.getTypeFromAst(.{ .strong = t })
+                else
+                    .void,
+            },
         );
         try self.write(file_writer, ";\n");
     }
 
     self.indent_level -= 1;
-    try self.print(file_writer, "}} {s};\n\n", .{struct_decl.name});
+    try self.print(file_writer, "}} {s};\n\n", .{type_decl.name});
 
-    for (struct_decl.methods.items) |method| {
+    for (type_decl.methods.items) |method| {
         try self.registerSymbol(method.name, try self.getTypeFromAst(.{ .strong = method.getType() }), .symbol);
         try self.pushScope();
         defer self.popScope();
 
         try self.compileTypeAst(file_writer, method.return_type);
-        try self.print(file_writer, " __zag_{s}_{s}(", .{ struct_decl.name, method.name }); // TODO: generics
+        try self.print(file_writer, " __zag_{s}_{s}(", .{ type_decl.name, method.name }); // TODO: generics
         for (method.parameters.items, 1..) |parameter, i| {
             const parameter_type = try self.getTypeFromAst(.{ .strong = parameter.type });
             try self.registerSymbol(parameter.name, parameter_type, .symbol);
@@ -349,17 +477,14 @@ fn compileEnumDeclaration(
     // register struct in scope
     var enum_: Type.Enum = .{
         .name = enum_decl.name,
-        .members = try .initCapacity(self.alloc, enum_decl.members.items.len),
-        .methods = try .initCapacity(self.alloc, enum_decl.methods.items.len),
+        .members = .init(self.alloc),
+        .methods = .init(self.alloc),
     };
     try self.registerSymbol(enum_decl.name, .{ .@"enum" = enum_ }, .type);
     for (enum_decl.members.items) |member| {
-        enum_.members.appendAssumeCapacity(.{
-            .name = member.name,
-            .value = b: {
-                std.debug.print("unimplemented enum explicit values\n", .{});
-                break :b null;
-            },
+        try enum_.members.put(member.name, b: {
+            std.debug.print("unimplemented enum explicit values\n", .{});
+            break :b null;
         });
     }
 
@@ -377,7 +502,7 @@ fn compileEnumDeclaration(
 
         const return_type = try self.alloc.create(Type);
         return_type.* = try self.getTypeFromAst(.{ .strong = method.return_type });
-        enum_.methods.appendAssumeCapacity(.{
+        try enum_.methods.put(method.name, .{
             .params = params,
             .return_type = return_type,
         });
@@ -528,7 +653,6 @@ fn compileType(self: *Self, file_writer: *std.ArrayList(u8), t: Type) CompilerEr
             try self.print(file_writer, " *{s}", .{if (reference.is_mut) "" else " const"});
         },
         .@"struct" => |s| try self.write(file_writer, try self.getInnerName(s.name)),
-
         .optional, .array, .error_union, .function => std.debug.panic("unimplemented type: {any}\n", .{t}),
         else => |primitive| try self.write(file_writer, @tagName(primitive)),
     };
@@ -536,10 +660,10 @@ fn compileType(self: *Self, file_writer: *std.ArrayList(u8), t: Type) CompilerEr
 
 /// Converts an AST type to a Compiler type.
 /// `infer_expr` is the expression with which the type is inferred.
-fn getTypeFromAst(
-    self: *Self,
-    t: union(enum) { strong: ast.Type, infer: ast.Expression },
-) CompilerError!Type {
+fn getTypeFromAst(self: *Self, t: union(enum) {
+    strong: ast.Type,
+    infer: ast.Expression,
+}) CompilerError!Type {
     return switch (t) {
         .strong => |strong| switch (strong) {
             .symbol => |symbol| Type.fromSymbol(symbol) catch try self.getSymbolType(symbol),
@@ -569,6 +693,19 @@ fn getTypeFromAst(
                         return_type.* = try self.getTypeFromAst(.{ .strong = function.return_type.* });
                         break :b return_type;
                     },
+                },
+            },
+            .array => |array| .{
+                .array = .{
+                    .inner = b: {
+                        const array_type = try self.alloc.create(Type);
+                        array_type.* = try self.getTypeFromAst(.{ .strong = array.inner.* });
+                        break :b array_type;
+                    },
+                    .size = (try self.solveComptimeExpression(if (array.size) |s|
+                        s.*
+                    else
+                        @panic("can't infer array size"))).u64,
                 },
             },
             else => |other| std.debug.panic("unimplemented type {s}\n", .{@tagName(other)}),
@@ -730,9 +867,9 @@ fn compileExpression(
             try self.write(file_writer, ")");
         },
         .member => |member| {
-            try self.compileExpression(file_writer, member.lhs);
-            try self.write(file_writer, if (try self.inferType(member.lhs.*) == .reference) "->" else ".");
-            try self.compileExpression(file_writer, member.rhs);
+            try self.compileExpression(file_writer, member.parent);
+            try self.write(file_writer, if (try self.inferType(member.parent.*) == .reference) "->" else ".");
+            try self.write(file_writer, member.member_name);
         },
         .ident => |ident| try self.write(file_writer, ident),
         .struct_instantiation => |struct_inst| {
@@ -758,6 +895,19 @@ fn compileExpression(
         },
         else => |other| std.debug.print("unimplemented expression {s}\n", .{@tagName(other)}),
     }
+}
+
+fn solveComptimeExpression(self: *Self, expression: ast.Expression) !Value {
+    _ = self;
+    return switch (expression) {
+        .int => |int| .{ .i64 = int },
+        .uint => |uint| .{ .u64 = uint },
+        .float => |float| .{ .f64 = float },
+        .char => |char| .{ .u8 = char },
+        // .binary => |binary| try (try self.solveComptimeExpression(binary.lhs.*))
+        //     .binaryOperation(binary.op, try self.solveComptimeExpression(binary.rhs.*)),
+        else => std.debug.panic("unimplemented comptime expression for {s}\n", .{@tagName(expression)}),
+    };
 }
 
 /// appends a new empty scope to the scope stack.

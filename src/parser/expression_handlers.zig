@@ -86,13 +86,10 @@ pub fn parseMemberAccessExpression(self: *Self, lhs: *const ast.Expression, _: B
     _ = self.advance(); // consume dot
     const member_name = try self.expect(self.advance(), .ident, "member expression", "member name");
 
-    const rhs = try self.alloc.create(ast.Expression);
-    rhs.* = .{ .ident = member_name };
-
     return self.putExprPos(.{
         .member = .{
-            .lhs = lhs,
-            .rhs = rhs,
+            .parent = lhs,
+            .member_name = member_name,
         },
     }, pos);
 }

@@ -95,8 +95,8 @@ pub const Expression = union(enum) {
     };
 
     pub const Member = struct {
-        lhs: *const Expression,
-        rhs: *const Expression,
+        parent: *const Expression,
+        member_name: []const u8,
     };
 
     pub const Call = struct {
