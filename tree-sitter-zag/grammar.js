@@ -248,6 +248,10 @@ export default grammar({
 
     call_expression: $ => prec(10, seq(
       field("callee", $.expression),
+      field("arguments", $.argument_list),
+    )),
+
+    argument_list: $ => seq(
       "(",
       repeat(seq(
         field("argument", $.expression),
@@ -255,7 +259,7 @@ export default grammar({
       )),
       optional(field("argument", $.expression)),
       ")",
-    )),
+    ),
 
     member_expression: $ => prec.left(11, seq(
       field("lhs", $.expression),

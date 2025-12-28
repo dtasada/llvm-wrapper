@@ -8,12 +8,48 @@ pub const Type = union(enum) {
 
     fn CompoundType(T: enum { @"struct", @"enum", @"union" }) type {
         return struct {
-            name: []const u8,
-            members: std.StringHashMap(switch (T) {
+            pub const MemberType = switch (T) {
                 .@"struct", .@"union" => *const Type,
                 .@"enum" => ?usize,
-            }),
-            methods: std.StringHashMap(Function),
+            };
+
+            const Method = struct {
+                inner_name: []const u8,
+                params: std.ArrayList(*const Type),
+                return_type: *const Type,
+            };
+
+            name: []const u8,
+            members: *std.StringHashMap(MemberType),
+            methods: *std.StringHashMap(Method),
+
+            /// get member or method. returns `null` if no member or method is found with `name`.
+            pub fn getProperty(self: *const CompoundType(T), name: []const u8) ?union(enum) {
+                member: MemberType,
+                method: Method,
+            } {
+                const member = self.members.get(name);
+                const method = self.methods.get(name);
+
+                return if (member) |m|
+                    .{ .member = m }
+                else if (method) |m|
+                    .{ .method = m }
+                else
+                    null;
+            }
+
+            pub fn init(alloc: std.mem.Allocator, name: []const u8) !CompoundType(T) {
+                const members = try alloc.create(std.StringHashMap(MemberType));
+                members.* = .init(alloc);
+                const methods = try alloc.create(std.StringHashMap(Method));
+                methods.* = .init(alloc);
+                return .{
+                    .name = name,
+                    .members = members,
+                    .methods = methods,
+                };
+            }
         };
     }
 

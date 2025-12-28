@@ -8,6 +8,8 @@
   (union_declaration)
 
   (struct_instantiation_expression)
+  (parameter_list)
+  (argument_list)
 ] @indent
 
 [

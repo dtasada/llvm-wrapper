@@ -14,35 +14,12 @@ struct MyStruct {
 	}
 }
 
-enum MyEnum {
-    a, b, c,
-}
-
-union MyUnion {
-    float: f32,
-    int: i32,
-    string: [2]u8,
-}
-
-fn foo() i32 {
-    return 42;
-}
-
 fn main() i32 {
-	let a = MyStruct { x: 1, y: 1 }; // should compile to `const MyStruct a`
+	let mut a = MyStruct { x: 1, y: 1 }; // should compile to `const MyStruct a`
 	let b = &a;                      // should compile to `const MyStruct * const b;`
-    let c = &mut a;                  // should compile to `const MyStruct * c;`
-    let mut d = &mut a;              // should compile to `MyStruct * d;`
-    b.x(asd, a);
-
-    // let b = "asd";
-    // printf("Hello world!\n");
-
-    for (0..12) |i| {
-
-    }
+    let c = &mut b;                  // should compile to `const MyStruct * c;`
+    let mut d = &mut c;              // should compile to `MyStruct * d;`
+    d.setX(a);
 
     let c = 420;
-
-    // return d;
 }

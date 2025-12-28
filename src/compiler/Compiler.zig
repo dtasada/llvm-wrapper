@@ -184,21 +184,21 @@ fn compileCompoundTypeDeclaration(
         .@"struct" => Type.Struct,
         .@"union" => Type.Union,
         .@"enum" => Type.Enum,
-    } = .{
-        .name = type_decl.name,
-        .members = .init(self.alloc),
-        .methods = .init(self.alloc),
-    };
-    try self.registerSymbol(
-        type_decl.name,
-        switch (T) {
-            .@"struct" => .{ .@"struct" = compound_type },
-            .@"union" => .{ .@"union" = compound_type },
-            .@"enum" => .{ .@"enum" = compound_type },
-        },
-        .type,
-    );
-    for (type_decl.members.items) |member|
+    } = try .init(self.alloc, type_decl.name);
+
+    try self.registerSymbol(type_decl.name, switch (T) {
+        .@"struct" => .{ .@"struct" = compound_type },
+        .@"union" => .{ .@"union" = compound_type },
+        .@"enum" => .{ .@"enum" = compound_type },
+    }, .type);
+
+    for (type_decl.members.items) |member| {
+        if (compound_type.getProperty(member.name)) |_|
+            std.debug.panic(
+                "comperr: duplicate member name in compound type declaration: {s}\n",
+                .{member.name},
+            );
+
         try compound_type.members.put(member.name, switch (T) {
             // TODO: default values
             .@"struct" => b: {
@@ -219,6 +219,7 @@ fn compileCompoundTypeDeclaration(
                 break :b null;
             },
         });
+    }
 
     for (type_decl.methods.items) |method| {
         var params: std.ArrayList(*const Type) = try .initCapacity(
@@ -235,6 +236,10 @@ fn compileCompoundTypeDeclaration(
         const return_type = try self.alloc.create(Type);
         return_type.* = try self.getTypeFromAst(.{ .strong = method.return_type });
         try compound_type.methods.put(method.name, .{
+            .inner_name = try std.fmt.allocPrint(self.alloc, "__zag_{s}_{s}", .{
+                type_decl.name,
+                method.name,
+            }), // TODO mangling
             .params = params,
             .return_type = return_type,
         });
@@ -247,30 +252,28 @@ fn compileCompoundTypeDeclaration(
     }});
     self.indent_level += 1;
 
-    for (type_decl.members.items) |member| {
+    var members = compound_type.members.iterator();
+    while (members.next()) |member| {
         try self.indent(file_writer);
         switch (T) {
             .@"struct" => {
                 try self.compileVariableSignature(
                     file_writer,
-                    member.name,
-                    try self.getTypeFromAst(.{ .strong = member.type }),
+                    member.key_ptr.*,
+                    member.value_ptr.*.*,
                 );
                 try self.write(file_writer, ";\n");
             },
             .@"union" => {
                 try self.compileVariableSignature(
                     file_writer,
-                    member.name,
-                    if (member.type) |t|
-                        try self.getTypeFromAst(.{ .strong = t })
-                    else
-                        .void,
+                    member.key_ptr.*,
+                    member.value_ptr.*.*,
                 );
                 try self.write(file_writer, ";\n");
             },
             .@"enum" => {
-                try self.print(file_writer, "{s},\n", .{member.name});
+                try self.print(file_writer, "{s},\n", .{member.key_ptr.*});
                 std.debug.print("unimplemented explicit enum member values\n", .{});
             },
         }
@@ -285,7 +288,7 @@ fn compileCompoundTypeDeclaration(
         defer self.popScope();
 
         try self.compileTypeAst(file_writer, method.return_type);
-        try self.print(file_writer, " __zag_{s}_{s}(", .{ type_decl.name, method.name }); // TODO: generics
+        try self.print(file_writer, " __zag_{s}_{s}(", .{ type_decl.name, method.name }); // TODO: mangling generics
         for (method.parameters.items, 1..) |parameter, i| {
             const parameter_type = try self.getTypeFromAst(.{ .strong = parameter.type });
             try self.registerSymbol(parameter.name, parameter_type, .symbol);
@@ -432,7 +435,10 @@ fn getTypeFromAst(self: *Self, t: union(enum) {
             .function => |function| .{
                 .function = .{
                     .params = b: {
-                        var params: std.ArrayList(*const Type) = try .initCapacity(self.alloc, function.parameters.items.len);
+                        var params: std.ArrayList(*const Type) = try .initCapacity(
+                            self.alloc,
+                            function.parameters.items.len,
+                        );
                         for (function.parameters.items) |p| {
                             const param = try self.alloc.create(Type);
                             param.* = try self.getTypeFromAst(.{ .strong = p.type });
@@ -609,21 +615,77 @@ fn compileExpression(
             });
             try self.compileExpression(file_writer, prefix.rhs);
         },
-        .call => |call| {
-            try self.compileExpression(file_writer, call.callee);
-            try self.write(file_writer, "(");
-            for (call.args.items, 1..) |*expr, i| {
-                try self.compileExpression(file_writer, expr);
-                if (i < call.args.items.len) try self.write(file_writer, ", ");
-            }
-            try self.write(file_writer, ")");
+        .call => |call| switch (call.callee.*) {
+            .member => |member| {
+                var parent_expr_buf: std.ArrayList(u8) = .empty;
+                try self.compileExpression(&parent_expr_buf, member.parent);
+                const parent_type = try self.getSymbolType(parent_expr_buf.items);
+
+                var parent_reference_level: i32 = 0;
+
+                b: switch (parent_type) {
+                    .@"struct" => |@"struct"| {
+                        if (@"struct".methods.get(member.member_name)) |method| {
+                            const self_param = method.params.items[0];
+                            const ref_level_diff = parent_reference_level - b2: {
+                                var self_method_reference_level: i32 = 0;
+                                count_ref_level: switch (self_param.*) {
+                                    .reference => |reference| {
+                                        self_method_reference_level += 1;
+                                        continue :count_ref_level reference.inner.*;
+                                    },
+                                    else => break :count_ref_level,
+                                }
+                                break :b2 self_method_reference_level;
+                            };
+                            try self.print(file_writer, "{s}(", .{method.inner_name});
+                            for (0..@abs(ref_level_diff)) |_|
+                                try self.write(
+                                    file_writer,
+                                    if (ref_level_diff > 0) "*" else if (ref_level_diff < 0)
+                                        "&"
+                                    else
+                                        unreachable,
+                                );
+                            try self.compileExpression(file_writer, member.parent);
+                            try self.write(file_writer, ", ");
+                            for (call.args.items, 1..) |*arg, i| {
+                                try self.compileExpression(file_writer, arg);
+                                if (i < call.args.items.len) try self.write(file_writer, ", ");
+                            }
+                            try self.write(file_writer, ")");
+                        } else std.debug.panic("comperr: {s}.{s} is not a method\n", .{
+                            @"struct".name,
+                            member.member_name,
+                        });
+                    },
+                    .reference => |reference| {
+                        parent_reference_level += 1;
+                        continue :b reference.inner.*;
+                    },
+                    else => |other| std.debug.panic(
+                        "comperr: member expression on {s} is illegal\n",
+                        .{@tagName(other)},
+                    ),
+                }
+            },
+            else => {
+                try self.compileExpression(file_writer, call.callee);
+                try self.write(file_writer, "(");
+                for (call.args.items, 1..) |*expr, i| {
+                    try self.compileExpression(file_writer, expr);
+                    if (i < call.args.items.len) try self.write(file_writer, ", ");
+                }
+                try self.write(file_writer, ")");
+            },
         },
-        .member => |member| {
-            try self.compileExpression(file_writer, member.parent);
-            try self.write(file_writer, if (try self.inferType(member.parent.*) == .reference) "->" else ".");
-            try self.write(file_writer, member.member_name);
+        .member => |member| try self.compileMemberExpression(file_writer, member),
+        .ident => |ident| {
+            if (self.getSymbolType(ident) catch null) |_|
+                try self.write(file_writer, ident)
+            else
+                std.debug.panic("comperr: unknown symbol {s}\n", .{ident});
         },
-        .ident => |ident| try self.write(file_writer, ident),
         .struct_instantiation => |struct_inst| {
             try self.print(file_writer, "({s}){{\n", .{struct_inst.name});
             self.indent_level += 1;
@@ -646,6 +708,41 @@ fn compileExpression(
             try self.compileExpression(file_writer, reference.inner);
         },
         else => |other| std.debug.print("unimplemented expression {s}\n", .{@tagName(other)}),
+    }
+}
+
+fn compileMemberExpression(
+    self: *Self,
+    file_writer: *std.ArrayList(u8),
+    member: ast.Expression.Member,
+) CompilerError!void {
+    const parent_type = try self.inferType(member.parent.*);
+    var delimiter: enum { @".", @"->" } = .@".";
+    b: switch (parent_type) {
+        .@"struct" => |@"struct"| {
+            if (@"struct".getProperty(member.member_name)) |property| switch (property) {
+                .member => {
+                    try self.compileExpression(file_writer, member.parent);
+                    try self.print(file_writer, "{s}{s}", .{
+                        @tagName(delimiter),
+                        member.member_name,
+                    });
+                    delimiter = .@".";
+                },
+                .method => std.debug.print("unimplemented: member methods\n", .{}),
+            } else std.debug.panic("comperr: property {s} doesn't exist for type {s}\n", .{
+                member.member_name,
+                @"struct".name,
+            });
+        },
+        .reference => |reference| {
+            delimiter = .@"->";
+            continue :b reference.inner.*;
+        },
+        else => |other| std.debug.panic(
+            "comperr: member expression on {s} is illegal\n",
+            .{@tagName(other)},
+        ),
     }
 }
 

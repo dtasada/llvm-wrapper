@@ -1,5 +1,21 @@
 [
   {
+    "type": "argument_list",
+    "named": true,
+    "fields": {
+      "argument": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "array_instantiation_expression",
     "named": true,
     "fields": {
@@ -251,12 +267,12 @@
     "type": "call_expression",
     "named": true,
     "fields": {
-      "argument": {
-        "multiple": true,
-        "required": false,
+      "arguments": {
+        "multiple": false,
+        "required": true,
         "types": [
           {
-            "type": "expression",
+            "type": "argument_list",
             "named": true
           }
         ]

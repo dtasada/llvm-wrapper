@@ -52,7 +52,8 @@
 (function_definition name: (ident) @function)
 
 (call_expression callee: (expression (ident) @function.call))
-(call_expression argument: (expression (ident) @variable.parameter))
+; (call_expression callee: (expression (member_expression (rhs: (ident) @function.call))))
+(argument_list argument: (expression (ident) @variable.parameter))
 (capture (ident) @variable.parameter)
 
 (comment) @comment
