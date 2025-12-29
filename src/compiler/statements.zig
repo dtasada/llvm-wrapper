@@ -8,30 +8,30 @@ const Type = @import("Type.zig").Type;
 const Self = @import("Compiler.zig");
 const CompilerError = Self.CompilerError;
 
-pub fn compileStatement(
+pub fn compile(
     self: *Self,
     file_writer: *std.ArrayList(u8),
     statement: *const ast.Statement,
 ) CompilerError!void {
     switch (statement.*) {
-        .function_definition => |fn_def| try self.compileFunctionDefinition(file_writer, fn_def),
-        .struct_declaration => |struct_decl| try compileCompoundTypeDeclaration(self, file_writer, .@"struct", struct_decl),
-        .@"return" => |return_expr| try compileReturnStatement(self, file_writer, return_expr),
-        .variable_definition => |var_decl| try compileVariableDefinition(self, file_writer, var_decl),
+        .function_definition => |fn_def| try functionDefinition(self, file_writer, fn_def),
+        .struct_declaration => |struct_decl| try compoundTypeDeclaration(self, file_writer, .@"struct", struct_decl),
+        .@"return" => |return_expr| try returnStatement(self, file_writer, return_expr),
+        .variable_definition => |var_decl| try variableDefinition(self, file_writer, var_decl),
         .expression => |*expr| {
-            try expressions.compileExpression(self, file_writer, expr);
+            try expressions.compile(self, file_writer, expr);
             try self.write(file_writer, ";\n");
         },
-        .@"if" => |if_stmt| try compileConditionalStatement(self, file_writer, .@"if", if_stmt),
-        .@"while" => |while_stmt| try compileConditionalStatement(self, file_writer, .@"while", while_stmt),
-        .@"for" => |for_stmt| try compileConditionalStatement(self, file_writer, .@"for", for_stmt),
+        .@"if" => |if_stmt| try conditional(self, file_writer, .@"if", if_stmt),
+        .@"while" => |while_stmt| try conditional(self, file_writer, .@"while", while_stmt),
+        .@"for" => |for_stmt| try conditional(self, file_writer, .@"for", for_stmt),
         .block => |block| try self.compileBlock(file_writer, block),
-        .enum_declaration => |enum_decl| try compileCompoundTypeDeclaration(self, file_writer, .@"enum", enum_decl),
-        .union_declaration => |union_decl| try compileCompoundTypeDeclaration(self, file_writer, .@"union", union_decl),
+        .enum_declaration => |enum_decl| try compoundTypeDeclaration(self, file_writer, .@"enum", enum_decl),
+        .union_declaration => |union_decl| try compoundTypeDeclaration(self, file_writer, .@"union", union_decl),
     }
 }
 
-fn compileCompoundTypeDeclaration(
+fn compoundTypeDeclaration(
     self: *Self,
     file_writer: *std.ArrayList(u8),
     comptime T: enum { @"struct", @"union", @"enum" },
@@ -65,13 +65,13 @@ fn compileCompoundTypeDeclaration(
             // TODO: default values
             .@"struct" => b: {
                 const member_type = try self.alloc.create(Type);
-                member_type.* = try .fromAst(self, .{ .strong = member.type });
+                member_type.* = try .fromAst(self, member.type);
                 break :b member_type;
             },
             .@"union" => b: {
                 const member_type = try self.alloc.create(Type);
                 member_type.* = if (member.type) |t|
-                    try .fromAst(self, .{ .strong = t })
+                    try .fromAst(self, t)
                 else
                     .void;
                 break :b member_type;
@@ -91,12 +91,12 @@ fn compileCompoundTypeDeclaration(
 
         for (method.parameters.items) |p| {
             const param_type = try self.alloc.create(Type);
-            param_type.* = try .fromAst(self, .{ .strong = p.type });
+            param_type.* = try .fromAst(self, p.type);
             params.appendAssumeCapacity(param_type);
         }
 
         const return_type = try self.alloc.create(Type);
-        return_type.* = try .fromAst(self, .{ .strong = method.return_type });
+        return_type.* = try .fromAst(self, method.return_type);
         try compound_type.methods.put(method.name, .{
             .inner_name = try std.fmt.allocPrint(self.alloc, "__zag_{s}_{s}", .{
                 type_decl.name,
@@ -145,14 +145,14 @@ fn compileCompoundTypeDeclaration(
     try self.print(file_writer, "}} {s};\n\n", .{type_decl.name});
 
     for (type_decl.methods.items) |method| {
-        try self.registerSymbol(method.name, try .fromAst(self, .{ .strong = method.getType() }), .symbol);
+        try self.registerSymbol(method.name, try .fromAst(self, method.getType()), .symbol);
         try self.pushScope();
         defer self.popScope();
 
-        try self.compileTypeAst(file_writer, method.return_type);
+        try self.compileType(file_writer, try .fromAst(self, method.return_type));
         try self.print(file_writer, " __zag_{s}_{s}(", .{ type_decl.name, method.name }); // TODO: mangling generics
         for (method.parameters.items, 1..) |parameter, i| {
-            const parameter_type: Type = try .fromAst(self, .{ .strong = parameter.type });
+            const parameter_type: Type = try .fromAst(self, parameter.type);
             try self.registerSymbol(parameter.name, parameter_type, .symbol);
             try self.compileVariableSignature(file_writer, parameter.name, parameter_type);
             if (i < method.parameters.items.len) try self.write(file_writer, ", ");
@@ -163,7 +163,7 @@ fn compileCompoundTypeDeclaration(
     }
 }
 
-fn compileReturnStatement(
+fn returnStatement(
     self: *Self,
     file_writer: *std.ArrayList(u8),
     r: ?ast.Expression,
@@ -171,23 +171,20 @@ fn compileReturnStatement(
     try self.write(file_writer, "return");
     if (r) |*expression| {
         try self.write(file_writer, " ");
-        try expressions.compileExpression(self, file_writer, expression);
+        try expressions.compile(self, file_writer, expression);
     }
     try self.write(file_writer, ";\n");
 }
 
-fn compileVariableDefinition(
+fn variableDefinition(
     self: *Self,
     file_writer: *std.ArrayList(u8),
     v: ast.Statement.VariableDefinition,
 ) CompilerError!void {
-    const variable_type: Type = try .fromAst(
-        self,
-        if (v.type == .inferred)
-            .{ .infer = v.assigned_value }
-        else
-            .{ .strong = v.type },
-    );
+    const variable_type: Type = if (v.type == .inferred)
+        try .infer(self, v.assigned_value)
+    else
+        try .fromAst(self, v.type);
 
     if (!v.is_mut) try self.write(file_writer, "const ");
 
@@ -195,14 +192,14 @@ fn compileVariableDefinition(
 
     try self.write(file_writer, " = ");
 
-    try expressions.compileExpression(self, file_writer, &v.assigned_value);
+    try expressions.compile(self, file_writer, &v.assigned_value);
 
     try self.write(file_writer, ";\n");
 
     try self.registerSymbol(v.variable_name, variable_type, .symbol);
 }
 
-fn compileConditionalStatement(
+fn conditional(
     self: *Self,
     file_writer: *std.ArrayList(u8),
     comptime T: enum { @"if", @"while", @"for" },
@@ -219,14 +216,14 @@ fn compileConditionalStatement(
     }});
 
     switch (T) {
-        .@"if", .@"while" => try expressions.compileExpression(self, file_writer, statement.condition),
+        .@"if", .@"while" => try expressions.compile(self, file_writer, statement.condition),
         .@"for" => switch (statement.iterator.*) {
             .range => |range| {
                 try self.compileType(file_writer, try .infer(self, range.start.*));
                 try self.print(file_writer, " {s} = ", .{statement.capture});
-                try expressions.compileExpression(self, file_writer, range.start);
+                try expressions.compile(self, file_writer, range.start);
                 try self.print(file_writer, "; {s} < ", .{statement.capture});
-                try expressions.compileExpression(self, file_writer, range.end);
+                try expressions.compile(self, file_writer, range.end);
                 try self.print(file_writer, "; {s}++", .{statement.capture});
             },
             else => |other| switch (try Type.infer(self, other)) {
@@ -243,11 +240,29 @@ fn compileConditionalStatement(
         else => {},
     }
 
-    try compileStatement(self, file_writer, statement.body);
+    try compile(self, file_writer, statement.body);
 
     switch (T) {
         .@"if" => if (statement.@"else") |@"else"|
-            try compileStatement(self, file_writer, @"else"),
+            try compile(self, file_writer, @"else"),
         else => {},
     }
+}
+
+fn functionDefinition(
+    self: *Self,
+    file_writer: *std.ArrayList(u8),
+    function_def: ast.Statement.FunctionDefinition,
+) CompilerError!void {
+    try self.registerSymbol(function_def.name, try .fromAst(self, function_def.getType()), .symbol);
+
+    try self.compileType(file_writer, try .fromAst(self, function_def.return_type));
+    try self.print(file_writer, " {s}(", .{function_def.name});
+    for (function_def.parameters.items, 1..) |parameter, i| {
+        try self.compileVariableSignature(file_writer, parameter.name, try .fromAst(self, parameter.type));
+        if (i < function_def.parameters.items.len) try self.write(file_writer, ", ");
+    }
+    try self.write(file_writer, ") ");
+
+    try self.compileBlock(file_writer, function_def.body);
 }

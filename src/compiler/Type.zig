@@ -137,61 +137,55 @@ pub const Type = union(enum) {
     }
 
     /// Converts an AST type to a Compiler type.
-    /// `infer_expr` is the expression with which the type is inferred.
-    pub fn fromAst(compiler: *Compiler, t: union(enum) {
-        strong: ast.Type,
-        infer: ast.Expression,
-    }) Compiler.CompilerError!Self {
+    /// `infer` is the expression with which the type is inferred.
+    pub fn fromAst(compiler: *Compiler, t: ast.Type) Compiler.CompilerError!Self {
         return switch (t) {
-            .strong => |strong| switch (strong) {
-                .symbol => |symbol| Self.fromSymbol(symbol) catch try compiler.getSymbolType(symbol),
-                .reference => |reference| .{
-                    .reference = .{
-                        .inner = b: {
-                            const ref_type = try compiler.alloc.create(Self);
-                            ref_type.* = try fromAst(compiler, .{ .strong = reference.inner.* });
-                            break :b ref_type;
-                        },
-                        .is_mut = reference.is_mut,
+            .symbol => |symbol| fromSymbol(symbol) catch try compiler.getSymbolType(symbol),
+            .reference => |reference| .{
+                .reference = .{
+                    .inner = b: {
+                        const ref_type = try compiler.alloc.create(Self);
+                        ref_type.* = try fromAst(compiler, reference.inner.*);
+                        break :b ref_type;
                     },
+                    .is_mut = reference.is_mut,
                 },
-                .function => |function| .{
-                    .function = .{
-                        .params = b: {
-                            var params: std.ArrayList(*const Self) = try .initCapacity(
-                                compiler.alloc,
-                                function.parameters.items.len,
-                            );
-                            for (function.parameters.items) |p| {
-                                const param = try compiler.alloc.create(Self);
-                                param.* = try fromAst(compiler, .{ .strong = p.type });
-                                params.appendAssumeCapacity(param);
-                            }
-                            break :b params;
-                        },
-                        .return_type = b: {
-                            const return_type = try compiler.alloc.create(Self);
-                            return_type.* = try fromAst(compiler, .{ .strong = function.return_type.* });
-                            break :b return_type;
-                        },
-                    },
-                },
-                .array => |array| .{
-                    .array = .{
-                        .inner = b: {
-                            const array_type = try compiler.alloc.create(Self);
-                            array_type.* = try fromAst(compiler, .{ .strong = array.inner.* });
-                            break :b array_type;
-                        },
-                        .size = (try compiler.solveComptimeExpression(if (array.size) |s|
-                            s.*
-                        else
-                            @panic("can't infer array size"))).u64,
-                    },
-                },
-                else => |other| std.debug.panic("unimplemented type {s}\n", .{@tagName(other)}),
             },
-            .infer => |expr| try infer(compiler, expr),
+            .function => |function| .{
+                .function = .{
+                    .params = b: {
+                        var params: std.ArrayList(*const Self) = try .initCapacity(
+                            compiler.alloc,
+                            function.parameters.items.len,
+                        );
+                        for (function.parameters.items) |p| {
+                            const param = try compiler.alloc.create(Self);
+                            param.* = try fromAst(compiler, p.type);
+                            params.appendAssumeCapacity(param);
+                        }
+                        break :b params;
+                    },
+                    .return_type = b: {
+                        const return_type = try compiler.alloc.create(Self);
+                        return_type.* = try fromAst(compiler, function.return_type.*);
+                        break :b return_type;
+                    },
+                },
+            },
+            .array => |array| .{
+                .array = .{
+                    .inner = b: {
+                        const array_type = try compiler.alloc.create(Self);
+                        array_type.* = try fromAst(compiler, array.inner.*);
+                        break :b array_type;
+                    },
+                    .size = (try compiler.solveComptimeExpression(if (array.size) |s|
+                        s.*
+                    else
+                        @panic("can't infer array size"))).u64,
+                },
+            },
+            else => |other| std.debug.panic("unimplemented type {s}\n", .{@tagName(other)}),
         };
     }
 
@@ -208,7 +202,7 @@ pub const Type = union(enum) {
                 .reference = .{
                     .inner = b: {
                         const inner = try compiler.alloc.create(Type);
-                        inner.* = try .fromAst(compiler, .{ .infer = reference.inner.* });
+                        inner.* = try .infer(compiler, reference.inner.*);
                         break :b inner;
                     },
                     .is_mut = reference.is_mut,
@@ -218,7 +212,7 @@ pub const Type = union(enum) {
                 .array = .{
                     .inner = b: {
                         const t = try compiler.alloc.create(Type);
-                        t.* = try .fromAst(compiler, .{ .strong = array.type });
+                        t.* = try .fromAst(compiler, array.type);
                         break :b t;
                     },
                     .size = if (array.length.* == .ident and std.mem.eql(u8, array.length.ident, "_"))

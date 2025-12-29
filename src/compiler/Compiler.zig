@@ -142,28 +142,10 @@ pub fn emit(self: *Self) CompilerError!void {
     try self.write(&file_writer, "#include <zag.h>\n");
 
     for (self.parser.output.items) |*statement|
-        try statements.compileStatement(self, &file_writer, statement);
+        try statements.compile(self, &file_writer, statement);
 
     try self.output.write(file_writer.items);
     try self.output.flush();
-}
-
-pub fn compileFunctionDefinition(
-    self: *Self,
-    file_writer: *std.ArrayList(u8),
-    function_def: ast.Statement.FunctionDefinition,
-) CompilerError!void {
-    try self.registerSymbol(function_def.name, try .fromAst(self, .{ .strong = function_def.getType() }), .symbol);
-
-    try self.compileTypeAst(file_writer, function_def.return_type);
-    try self.print(file_writer, " {s}(", .{function_def.name});
-    for (function_def.parameters.items, 1..) |parameter, i| {
-        try self.compileVariableSignature(file_writer, parameter.name, try .fromAst(self, .{ .strong = parameter.type }));
-        if (i < function_def.parameters.items.len) try self.write(file_writer, ", ");
-    }
-    try self.write(file_writer, ") ");
-
-    try self.compileBlock(file_writer, function_def.body);
 }
 
 pub fn compileBlock(
@@ -179,23 +161,12 @@ pub fn compileBlock(
     self.indent_level += 1;
     for (block.items) |*statement| {
         try self.indent(file_writer);
-        try statements.compileStatement(self, file_writer, statement);
+        try statements.compile(self, file_writer, statement);
     }
     self.indent_level -= 1;
 
     try self.indent(file_writer);
     try self.write(file_writer, "}\n\n");
-}
-
-pub fn compileTypeAst(self: *Self, file_writer: *std.ArrayList(u8), t: ast.Type) CompilerError!void {
-    switch (t) {
-        .symbol => |symbol| try self.compileType(file_writer, try self.getSymbolType(symbol)),
-        .reference => |reference| {
-            try self.compileTypeAst(file_writer, reference.inner.*);
-            try self.print(file_writer, " *{s}", .{if (reference.is_mut) "" else " const"});
-        },
-        else => |other| std.debug.panic("unimplemented type {s}\n", .{@tagName(other)}),
-    }
 }
 
 pub fn compileType(self: *Self, file_writer: *std.ArrayList(u8), t: Type) CompilerError!void {
