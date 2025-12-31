@@ -20,7 +20,7 @@ const NudLookup = std.AutoHashMap(Lexer.TokenKind, NudHandler);
 const LedLookup = std.AutoHashMap(Lexer.TokenKind, LedHandler);
 const BpLookup = std.AutoHashMap(Lexer.TokenKind, BindingPower);
 
-fn hashAnAnything(context: anytype, key: anytype, depth: u32) void {
+pub fn hash(context: anytype, key: anytype, depth: u32) void {
     if (depth > 100) { // arbitrary recursion limit
         return;
     }
@@ -60,25 +60,25 @@ fn hashAnAnything(context: anytype, key: anytype, depth: u32) void {
 
         .array => {
             for (key) |item| {
-                hashAnAnything(context, item, depth + 1);
+                hash(context, item, depth + 1);
             }
         },
 
         .@"struct" => |info| {
             inline for (info.fields) |field| {
                 if (!field.is_comptime) {
-                    hashAnAnything(context, @field(key, field.name), depth + 1);
+                    hash(context, @field(key, field.name), depth + 1);
                 }
             }
         },
 
         .@"union" => |union_info| {
-            hashAnAnything(context, std.meta.activeTag(key), depth + 1);
+            hash(context, std.meta.activeTag(key), depth + 1);
             inline for (union_info.fields) |field| {
                 if (std.mem.eql(u8, field.name, @tagName(std.meta.activeTag(key)))) {
                     if (field.type != void) {
                         const payload = @field(key, field.name);
-                        hashAnAnything(context, payload, depth + 1);
+                        hash(context, payload, depth + 1);
                     }
                     break;
                 }
@@ -88,7 +88,7 @@ fn hashAnAnything(context: anytype, key: anytype, depth: u32) void {
         .optional => {
             if (key) |payload| {
                 context.update(&.{1});
-                hashAnAnything(context, payload, depth + 1);
+                hash(context, payload, depth + 1);
             } else {
                 context.update(&.{0});
             }
@@ -99,7 +99,7 @@ fn hashAnAnything(context: anytype, key: anytype, depth: u32) void {
         .@"anyframe" => @compileError("unable to hash type " ++ @typeName(Key)),
         .vector => |info| {
             for (0..info.len) |i| {
-                hashAnAnything(context, key[i], depth + 1);
+                hash(context, key[i], depth + 1);
             }
         },
         .error_union => {},
@@ -376,7 +376,7 @@ pub fn parseGenericParameters(self: *Self) ParserError!ast.ParameterList {
 }
 
 pub fn parseArguments(self: *Self) ParserError!ast.ArgumentList {
-    var args = ast.ArgumentList{};
+    var args: ast.ArgumentList = .empty;
 
     try self.expect(self.advance(), .open_paren, "argument list", "(");
 
@@ -397,7 +397,7 @@ pub fn parseArguments(self: *Self) ParserError!ast.ArgumentList {
 }
 
 pub fn parseBlock(self: *Self) !ast.Block {
-    var block = ast.Block{};
+    var block: ast.Block = .empty;
 
     try self.expect(self.advance(), .open_brace, "block", "{");
 
@@ -410,7 +410,7 @@ pub fn parseBlock(self: *Self) !ast.Block {
 }
 
 pub fn parseParametersGeneric(self: *Self, type_is_optional: bool) ParserError!ast.ParameterList {
-    var params = ast.ParameterList{};
+    var params: ast.ParameterList = .empty;
 
     try self.expect(self.advance(), .open_paren, "parameter list", "(");
 
@@ -446,7 +446,7 @@ pub fn parseParametersGeneric(self: *Self, type_is_optional: bool) ParserError!a
 /// Puts expression's hash code into `source_map` with `pos` as value and then returns it back.
 pub inline fn putExprPos(self: *Self, expr: ast.Expression, pos: utils.Position) !ast.Expression {
     var h = std.hash.Wyhash.init(0);
-    hashAnAnything(&h, expr, 0);
+    hash(&h, expr, 0);
     try self.source_map.put(h.final(), pos);
     return expr;
 }
@@ -454,14 +454,14 @@ pub inline fn putExprPos(self: *Self, expr: ast.Expression, pos: utils.Position)
 /// Gets expression from `source_map` by hash code.
 pub inline fn getExprPos(self: *const Self, expr: anytype) !utils.Position {
     var h = std.hash.Wyhash.init(0);
-    hashAnAnything(&h, expr, 0);
+    hash(&h, expr, 0);
     return self.source_map.get(h.final()) orelse error.ExpressionNotInMap;
 }
 
 /// Puts expression's hash code into `source_map` with `pos` as value and then returns it back.
 pub inline fn putStatementPos(self: *Self, stmt: ast.Statement, pos: utils.Position) !ast.Statement {
     var h = std.hash.Wyhash.init(0);
-    hashAnAnything(&h, stmt, 0);
+    hash(&h, stmt, 0);
     try self.source_map.put(h.final(), pos);
     return stmt;
 }
@@ -469,6 +469,6 @@ pub inline fn putStatementPos(self: *Self, stmt: ast.Statement, pos: utils.Posit
 /// Gets expression from `source_map` by hash code.
 pub inline fn getStatementPos(self: *const Self, stmt: anytype) !utils.Position {
     var h = std.hash.Wyhash.init(0);
-    hashAnAnything(&h, stmt, 0);
-    return self.source_map.get(h.final()) orelse error.ExpressionNotInMap;
+    hash(&h, stmt, 0);
+    return self.source_map.get(h.final()) orelse error.StatementNotInMap;
 }

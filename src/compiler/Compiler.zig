@@ -14,6 +14,9 @@ const Value = @import("Value.zig").Value;
 const Self = @This();
 
 pub const CompilerError = error{
+    MissingArguments,
+    TooManyArguments,
+    TypeMismatch,
     SymbolNotVariable,
     UnsupportedType,
     UnsupportedExpression,
@@ -216,6 +219,8 @@ pub fn emit(self: *Self) CompilerError!void {
         main_obj,
         out_c_file_path,
         @"-Iinclude",
+        "-Wall",
+        "-Wextra",
     }, self.alloc);
 
     cc.stdin_behavior = .Ignore;
@@ -353,6 +358,7 @@ pub fn getSymbolType(self: *const Self, symbol: []const u8) !Type {
             inline else => |s| s.type,
         };
 
+    // return primitive type
     return Type.fromSymbol(symbol) catch utils.printErr(
         error.UnknownSymbol,
         "Compiler error: Unknown symbol: {s}\n",

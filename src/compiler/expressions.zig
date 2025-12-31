@@ -1,6 +1,9 @@
 const std = @import("std");
 
+const utils = @import("utils");
+
 const ast = @import("Parser").ast;
+const hash = @import("Parser").hash;
 
 const Self = @import("Compiler.zig");
 const Type = @import("Type.zig").Type;
@@ -207,9 +210,46 @@ fn call(
                         else => unreachable,
                     }
 
+                    const expected_args = method.params.items.len - 1;
+                    const received_args = call_expr.args.items.len;
+                    if (expected_args < received_args) {
+                        return utils.printErr(
+                            error.TooManyArguments,
+                            "comperr: Too many arguments in method call at {f}. Expected {}, found {}\n",
+                            .{
+                                try self.parser.getExprPos(call_expr.args.items[0]),
+                                expected_args,
+                                received_args,
+                            },
+                            .red,
+                        );
+                    }
+
+                    if (method.params.items.len - 1 > call_expr.args.items.len) {
+                        return utils.printErr(
+                            error.MissingArguments,
+                            "comperr: Missing arguments in method call at {f}. Expected {}, found {}\n",
+                            .{
+                                try self.parser.getExprPos(call_expr.args.items[0]),
+                                expected_args,
+                                received_args,
+                            },
+                            .red,
+                        );
+                    }
+
                     for (method.params.items[1..], 0..) |param, i| {
-                        if (!param.eq(&try .infer(self, call_expr.args.items[i])))
-                            std.debug.panic("comperr: type doesn't match method signature\n", .{});
+                        const received_type_expr = call_expr.args.items[i];
+                        const received_type: Type = try .infer(self, received_type_expr);
+                        if (!param.eq(&received_type)) {
+                            const pos = try self.parser.getExprPos(received_type_expr);
+                            return utils.printErr(
+                                error.TypeMismatch,
+                                "comperr: type doesn't match method signature at {f}. Expected {f}, got {f}\n",
+                                .{ pos, param, received_type },
+                                .red,
+                            );
+                        }
                     }
 
                     const ref_level_diff = parent_reference_level - b2: {
@@ -258,8 +298,6 @@ fn call(
         else => switch (try Type.infer(self, call_expr.callee.*)) {
             .function => |function| {
                 for (function.params.items[1..], 0..) |param, i| {
-                    std.debug.print("param type: {}\n", .{param});
-                    std.debug.print("infer type: {}\n", .{try Type.infer(self, call_expr.args.items[i])});
                     if (!param.eq(&try .infer(self, call_expr.args.items[i]))) {
                         std.debug.panic("comperr: type doesn't match function signature\n", .{});
                     }

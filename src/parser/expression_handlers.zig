@@ -44,6 +44,8 @@ pub fn parseBinaryExpression(self: *Self, lhs: *const ast.Expression, bp: Bindin
 }
 
 pub fn parseExpression(self: *Self, bp: BindingPower) ParserError!ast.Expression {
+    const pos = self.currentPosition();
+
     // first parse the NUD
     const nud_fn = try self.getHandler(.nud, self.currentTokenKind());
     var lhs = try nud_fn(self);
@@ -62,7 +64,7 @@ pub fn parseExpression(self: *Self, bp: BindingPower) ParserError!ast.Expression
         lhs = try led_fn(self, old_lhs, try self.getHandler(.bp, self.currentTokenKind()));
     }
 
-    return lhs;
+    return self.putExprPos(lhs, pos);
 }
 
 pub fn parseAssignmentExpression(self: *Self, lhs: *const ast.Expression, bp: BindingPower) ParserError!ast.Expression {
@@ -110,11 +112,13 @@ pub fn parsePrefixExpression(self: *Self) ParserError!ast.Expression {
 }
 
 pub fn parseGroupExpression(self: *Self) ParserError!ast.Expression {
+    const pos = self.currentPosition();
+
     try self.expect(self.advance(), Lexer.Token.open_paren, "group expression", "(");
     const expr = try parseExpression(self, .default);
     try self.expect(self.advance(), Lexer.Token.close_paren, "group expression", ")");
 
-    return expr;
+    return self.putExprPos(expr, pos);
 }
 
 pub fn parseStructInstantiationExpression(self: *Self, lhs: *const ast.Expression, _: BindingPower) ParserError!ast.Expression {

@@ -67,23 +67,6 @@ pub const Type = union(enum) {
                     if (!deepEqInternal(field.type, pa, pb)) return false;
                 }
                 return true;
-
-                // return Type.eq(
-                //     &.{
-                //         .@"struct" = .{
-                //             .name = rhs.name,
-                //             .members = rhs.members,
-                //             .methods = rhs.methods,
-                //         },
-                //     },
-                //     &.{
-                //         .@"struct" = .{
-                //             .name = lhs.name,
-                //             .members = lhs.members,
-                //             .methods = lhs.methods,
-                //         },
-                //     },
-                // );
             }
         };
     }
@@ -127,6 +110,8 @@ pub const Type = union(enum) {
 
     void,
 
+    type,
+
     @"struct": Struct,
     @"enum": Enum,
     @"union": Union,
@@ -169,7 +154,7 @@ pub const Type = union(enum) {
     /// `infer` is the expression with which the type is inferred.
     pub fn fromAst(compiler: *Compiler, t: ast.Type) Compiler.CompilerError!Self {
         return switch (t) {
-            .symbol => |symbol| fromSymbol(symbol) catch try compiler.getSymbolType(symbol),
+            .symbol => |symbol| try compiler.getSymbolType(symbol),
             .reference => |reference| .{
                 .reference = .{
                     .inner = b: {
@@ -404,5 +389,38 @@ pub const Type = union(enum) {
                 @compileError(err);
             },
         };
+    }
+
+    pub fn format(
+        self: *const Self,
+        writer: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        switch (self.*) {
+            inline .@"struct", .@"enum", .@"union" => |compound| _ = try writer.write(compound.name),
+            .optional => |optional| try writer.print("?{f}", .{optional}),
+            .reference => |reference| try writer.print("&{s}{f}", .{
+                if (reference.is_mut) "mut " else "",
+                reference.inner,
+            }),
+            .array => |array| {
+                _ = try writer.write("[");
+                if (array.size) |size| try writer.print("{}", .{size});
+                _ = try writer.write("]");
+                try writer.print("{f}", .{array.inner});
+            },
+            .error_union => |error_union| {
+                if (error_union.@"error") |err| try writer.print("{f}", .{err});
+                try writer.print("!{f}", .{error_union.success});
+            },
+            .function => |function| {
+                _ = try writer.write("fn (");
+                for (function.params.items, 1..) |param, i| {
+                    try writer.print("{f}", .{param});
+                    if (i < function.params.items.len) _ = try writer.write(", ");
+                }
+                try writer.print(") {f}", .{function.return_type});
+            },
+            else => _ = try writer.write(@tagName(self.*)),
+        }
     }
 };
