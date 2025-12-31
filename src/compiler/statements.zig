@@ -58,7 +58,7 @@ fn compoundTypeDeclaration(
     for (type_decl.members.items) |member| {
         if (compound_type.getProperty(member.name)) |_| return utils.printErr(
             error.DuplicateMember,
-            "comperr: Duplicate member {s} declared in {s} at {f}.\n",
+            "comperr: Duplicate member '{s}' declared in '{s}' at {f}.\n",
             .{ member.name, type_decl.name, try self.parser.getStatementPos(switch (T) {
                 .@"struct" => .{ .struct_declaration = type_decl },
                 .@"union" => .{ .union_declaration = type_decl },
@@ -192,6 +192,14 @@ fn variableDefinition(
         try .infer(self, v.assigned_value)
     else
         try .fromAst(self, v.type);
+
+    const received_type: Type = try .infer(self, v.assigned_value);
+    if (!variable_type.eq(&received_type)) return utils.printErr(
+        error.TypeMismatch,
+        "comperr: Type of expression doesn't match explicit type. Expected: '{f}', received '{f}' ({f})\n",
+        .{ variable_type, received_type, try self.parser.getExprPos(v.assigned_value) },
+        .red,
+    );
 
     if (!v.is_mut) try self.write(file_writer, "const ");
 

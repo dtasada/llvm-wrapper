@@ -294,8 +294,26 @@ pub const Type = union(enum) {
         else b: {
             const length = (try compiler.solveComptimeExpression(array.length.*)).u64;
 
-            if (length != array.contents.items.len)
-                std.debug.panic("comperr: array type size does not match initializer list\n", .{});
+            const expected_length = array.contents.items.len;
+            if (expected_length < length) return utils.printErr(
+                error.MissingArguments,
+                "comperr: Too many items in array initializer list. Expected {}, received {} ({f})\n",
+                .{
+                    expected_length,
+                    length,
+                    try compiler.parser.getExprPos(.{ .array_instantiation = array }),
+                },
+                .red,
+            ) else if (expected_length > length) return utils.printErr(
+                error.TooManyArguments,
+                "comperr: Missing items in array initializer list. Expected {}, received {} ({f})\n",
+                .{
+                    expected_length,
+                    length,
+                    try compiler.parser.getExprPos(.{ .array_instantiation = array }),
+                },
+                .red,
+            );
 
             break :b length;
         };

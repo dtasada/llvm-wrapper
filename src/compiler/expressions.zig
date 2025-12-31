@@ -226,31 +226,25 @@ fn call(
 
                     const expected_args = method.params.items.len - 1;
                     const received_args = call_expr.args.items.len;
-                    if (expected_args < received_args) {
-                        return utils.printErr(
-                            error.TooManyArguments,
-                            "comperr: Too many arguments in method call at {f}. Expected {}, found {}\n",
-                            .{
-                                try self.parser.getExprPos(call_expr.args.items[0]),
-                                expected_args,
-                                received_args,
-                            },
-                            .red,
-                        );
-                    }
-
-                    if (method.params.items.len - 1 > call_expr.args.items.len) {
-                        return utils.printErr(
-                            error.MissingArguments,
-                            "comperr: Missing arguments in method call at {f}. Expected {}, found {}\n",
-                            .{
-                                try self.parser.getExprPos(call_expr.args.items[0]),
-                                expected_args,
-                                received_args,
-                            },
-                            .red,
-                        );
-                    }
+                    if (expected_args < received_args) return utils.printErr(
+                        error.TooManyArguments,
+                        "comperr: Too many arguments in method call at {f}. Expected {}, found {}\n",
+                        .{
+                            try self.parser.getExprPos(call_expr.args.items[0]),
+                            expected_args,
+                            received_args,
+                        },
+                        .red,
+                    ) else if (expected_args > received_args) return utils.printErr(
+                        error.MissingArguments,
+                        "comperr: Missing arguments in method call at {f}. Expected {}, found {}\n",
+                        .{
+                            try self.parser.getExprPos(call_expr.args.items[0]),
+                            expected_args,
+                            received_args,
+                        },
+                        .red,
+                    );
 
                     for (method.params.items[1..], 0..) |param, i| {
                         const received_expr = call_expr.args.items[i];
@@ -321,7 +315,7 @@ fn call(
                     if (!param.eq(&try .infer(self, call_expr.args.items[i]))) {
                         return utils.printErr(
                             error.TypeMismatch,
-                            "comperr: type doesn't match function signature at {f}. Expected '{f}', got '{f}'\n",
+                            "comperr: Type doesn't match function signature at {f}. Expected '{f}', got '{f}'\n",
                             .{ try self.parser.getExprPos(received_expr), param, received_type },
                             .red,
                         );
