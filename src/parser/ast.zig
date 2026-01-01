@@ -266,10 +266,10 @@ pub const Type = union(enum) {
     };
 
     inferred,
-    symbol: []const u8, //
+    symbol: []const u8,
     optional: *const Type,
-    reference: Reference, //
-    array: Array, //
+    reference: Reference,
+    array: Array,
     error_union: ErrorUnion,
-    function: Function, //
+    function: Function,
 };

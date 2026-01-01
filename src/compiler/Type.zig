@@ -205,7 +205,27 @@ pub const Type = union(enum) {
                         @panic("can't infer array size"))).u64,
                 },
             },
-            .optional, .error_union => std.debug.panic("unimplemented type\n", .{}),
+            .optional => |optional| .{
+                .optional = b: {
+                    const t_ptr = try compiler.alloc.create(Type);
+                    t_ptr.* = try fromAst(compiler, optional.*);
+                    break :b t_ptr;
+                },
+            },
+            .error_union => |error_union| .{
+                .error_union = b: {
+                    const success = try compiler.alloc.create(Type);
+                    success.* = try fromAst(compiler, error_union.success.*);
+
+                    var @"error": ?*Type = null;
+                    if (error_union.@"error") |err| {
+                        @"error" = try compiler.alloc.create(Type);
+                        @"error".?.* = try fromAst(compiler, err.*);
+                    }
+
+                    break :b .{ .success = success, .@"error" = @"error" };
+                },
+            },
             .inferred => unreachable,
         };
     }
@@ -245,18 +265,6 @@ pub const Type = union(enum) {
                 );
 
                 return switch (binary.op) {
-                    .plus,
-                    .dash,
-                    .asterisk,
-                    .slash,
-                    .percent,
-                    .ampersand,
-                    .pipe,
-                    .caret,
-                    .shift_right,
-                    .shift_left,
-                    => lhs,
-
                     .equals_equals,
                     .greater,
                     .less,
@@ -266,6 +274,8 @@ pub const Type = union(enum) {
                     .logical_and,
                     .logical_or,
                     => .bool,
+
+                    else => lhs,
                 };
             },
             .prefix => |prefix| try infer(compiler, prefix.rhs.*),
@@ -314,7 +324,7 @@ pub const Type = union(enum) {
                     .is_mut = reference.is_mut,
                 },
             },
-            else => |other| std.debug.panic("unimplemented type: {s}\n", .{@tagName(other)}),
+            .bad_node => unreachable,
         };
     }
 

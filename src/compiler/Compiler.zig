@@ -42,6 +42,7 @@ parser: *const Parser,
 
 output: File,
 zag_header: File,
+zag_header_contents: std.ArrayList(struct { type: Type, inner_name: []const u8 }),
 
 indent_level: usize = 0,
 
@@ -72,6 +73,10 @@ const File = struct {
 
     fn write(self: *File, bytes: []const u8) !void {
         _ = try self.writer.interface.write(bytes);
+    }
+
+    fn print(self: *File, comptime fmt: []const u8, args: anytype) CompilerError!void {
+        try self.writer.interface.print(fmt, args);
     }
 
     fn flush(self: *File) !void {
@@ -110,7 +115,7 @@ pub fn init(alloc: std.mem.Allocator, parser: *const Parser, file_path: []const 
 
     const zag_header_path = try std.fs.path.join(alloc, &.{ ".zag-out", "zag", "zag.h" });
     const zag_header_file = try @".zag-out/zag".createFile("zag.h", .{});
-    _ = try zag_header_file.write(
+    _ = try zag_header_file.write( // TODO: dynamic
         \\#ifndef ZAG_H
         \\#define ZAG_H
         \\
@@ -157,6 +162,7 @@ pub fn init(alloc: std.mem.Allocator, parser: *const Parser, file_path: []const 
 
         .output = try .init(alloc, @".c", output_file),
         .zag_header = try .init(alloc, zag_header_path, zag_header_file),
+        .zag_header_contents = .empty, // TODO: will probably change in the future, when compiling files
     };
 
     var @".zag-out/bin" = try @".zag-out".makeOpenPath("bin", .{});
@@ -215,15 +221,7 @@ pub fn emit(self: *Self) CompilerError!void {
     const main_obj = try std.fs.path.join(self.alloc, &.{ ".zag-out", "bin", "main" });
     const @"-Iinclude" = try std.fs.path.join(self.alloc, &.{ "-I./", ".zag-out", "zag" });
 
-    std.debug.print("{s} {s} {s} {s} {s}\n", .{
-        "/usr/bin/cc",
-        "-o",
-        main_obj,
-        out_c_file_path,
-        @"-Iinclude",
-    });
-
-    var cc = std.process.Child.init(&.{
+    const cmd_args: []const []const u8 = &.{
         "/usr/bin/cc",
         "-o",
         main_obj,
@@ -231,7 +229,10 @@ pub fn emit(self: *Self) CompilerError!void {
         @"-Iinclude",
         "-Wall",
         "-Wextra",
-    }, self.alloc);
+    };
+    for (cmd_args) |arg| std.debug.print("{s} \n", .{arg});
+    std.debug.print("\n", .{});
+    var cc = std.process.Child.init(cmd_args, self.alloc);
 
     cc.stdin_behavior = .Ignore;
     cc.stdout_behavior = .Pipe;
@@ -278,7 +279,17 @@ pub fn compileType(self: *Self, file_writer: *std.ArrayList(u8), t: Type) Compil
             try self.print(file_writer, " *{s}", .{if (reference.is_mut) "" else " const"});
         },
         .@"struct" => |s| try self.write(file_writer, try self.getInnerName(s.name)),
-        .optional, .error_union => std.debug.panic("unimplemented type: {any}\n", .{t}),
+        // .optional => |optional| {
+        //     var optional_already_exists = false;
+        //     for (self.zag_header_contents.items) |item| {
+        //         if (item.type.eq(optional)) optional_already_exists = true;
+        //     }
+        //
+        //     if (!optional_already_exists) {
+        //         self.zag_header.print("__ZAG_OPTIONAL_TYPE(__zag_Optional_)", .{});
+        //     }
+        // },
+        .error_union => std.debug.panic("unimplemented type: {any}\n", .{t}),
 
         // should be unreachable, array and function types are handled in `compileVariableSignature`
         .array, .function => unreachable,
