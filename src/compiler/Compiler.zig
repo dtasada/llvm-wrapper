@@ -278,7 +278,10 @@ pub fn compileType(self: *Self, file_writer: *std.ArrayList(u8), t: Type) Compil
             try self.print(file_writer, " *{s}", .{if (reference.is_mut) "" else " const"});
         },
         .@"struct" => |s| try self.write(file_writer, try self.getInnerName(s.name)),
-        .optional, .array, .error_union, .function => std.debug.panic("unimplemented type: {any}\n", .{t}),
+        .optional, .error_union => std.debug.panic("unimplemented type: {any}\n", .{t}),
+
+        // should be unreachable, array and function types are handled in `compileVariableSignature`
+        .array, .function => unreachable,
         else => |primitive| try self.write(file_writer, @tagName(primitive)),
     };
 }

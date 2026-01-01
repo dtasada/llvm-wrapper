@@ -330,7 +330,12 @@ fn call(
                 }
                 try self.write(file_writer, ")");
             },
-            else => std.debug.panic("comperr: expression is not callable\n", .{}),
+            else => |other| return utils.printErr(
+                error.IllegalExpression,
+                "comperr: Expression of type '{f}' is not callable ({f})\n",
+                .{ other, try self.parser.getExprPos(call_expr.callee.*) },
+                .red,
+            ),
         },
     }
 }

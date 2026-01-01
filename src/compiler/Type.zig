@@ -198,13 +198,15 @@ pub const Type = union(enum) {
                         array_type.* = try fromAst(compiler, array.inner.*);
                         break :b array_type;
                     },
+
                     .size = (try compiler.solveComptimeExpression(if (array.size) |s|
                         s.*
                     else
                         @panic("can't infer array size"))).u64,
                 },
             },
-            else => |other| std.debug.panic("unimplemented type {s}\n", .{@tagName(other)}),
+            .optional, .error_union => std.debug.panic("unimplemented type\n", .{}),
+            .inferred => unreachable,
         };
     }
 
@@ -231,15 +233,77 @@ pub const Type = union(enum) {
                 .f64,
 
             .call => |call| try inferCallExpression(compiler, call),
+            .member => |member| try inferMemberExpression(compiler, member),
+            .binary => |binary| {
+                const lhs: Type = try .infer(compiler, binary.lhs.*);
+                const rhs: Type = try .infer(compiler, binary.rhs.*);
+                if (!lhs.eq(&rhs)) return utils.printErr(
+                    error.TypeMismatch,
+                    "comperr: Mismatched types in binary expression at {f}: left is {f}, right is {f}\n",
+                    .{ try compiler.parser.getExprPos(binary.lhs.*), lhs, rhs },
+                    .red,
+                );
+
+                return switch (binary.op) {
+                    .plus,
+                    .dash,
+                    .asterisk,
+                    .slash,
+                    .percent,
+                    .ampersand,
+                    .pipe,
+                    .caret,
+                    .shift_right,
+                    .shift_left,
+                    => lhs,
+
+                    .equals_equals,
+                    .greater,
+                    .less,
+                    .greater_equals,
+                    .less_equals,
+                    .bang_equals,
+                    .logical_and,
+                    .logical_or,
+                    => .bool,
+                };
+            },
+            .prefix => |prefix| try infer(compiler, prefix.rhs.*),
+            .assignment, .range => @panic("invalid"),
             .struct_instantiation => |struct_inst| compiler.getSymbolType(struct_inst.name) catch return utils.printErr(
                 error.UnknownSymbol,
                 "comperr: Unknown symbol '{s}' at {f}\n",
                 .{ struct_inst.name, try compiler.parser.getExprPos(expr) },
                 .red,
             ),
-            .prefix => |prefix| try infer(compiler, prefix.rhs.*),
             .array_instantiation => |array| try inferArrayInstantiationExpression(compiler, array),
-            .member => |member| try inferMemberExpression(compiler, member),
+            .block => .void,
+            .@"if" => |@"if"| if (@"if".@"else") |@"else"| {
+                const expected: Type = try .infer(compiler, @"if".body.*);
+                const received: Type = try .infer(compiler, @"else".*);
+                if (!expected.eq(&received)) return utils.printErr(
+                    error.TypeMismatch,
+                    "comperr: Type mismatch in if expression at {f}: {f} and {f} are not compatible",
+                    .{ try compiler.parser.getExprPos(.{ .@"if" = @"if" }), expected, received },
+                    .red,
+                );
+
+                return expected;
+            } else return utils.printErr(
+                error.MissingElseClause,
+                "comperr: If expression must contain an else clause ({f})\n",
+                .{try compiler.parser.getExprPos(.{ .@"if" = @"if" })},
+                .red,
+            ),
+            .index => |index| switch (try Type.infer(compiler, index.lhs.*)) {
+                .array => |array| array.inner.*,
+                else => |other| utils.printErr(
+                    error.IllegalExpression,
+                    "comperr: Illegal index expression on '{f}' at {f}.",
+                    .{ other, try compiler.parser.getExprPos(index.lhs.*) },
+                    .red,
+                ),
+            },
             .reference => |reference| .{
                 .reference = .{
                     .inner = b: {

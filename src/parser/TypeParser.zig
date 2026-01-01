@@ -91,12 +91,6 @@ pub fn parseSymbolType(self: *Self, _: std.mem.Allocator) ParserError!ast.Type {
         "type name",
     );
 
-    if (std.mem.eql(u8, ident, "Self")) {
-        return .{
-            .self_type = {},
-        };
-    }
-
     return .{ .symbol = ident };
 }
 
