@@ -25,23 +25,35 @@ pub fn compile(
         if (!expected_type.eql(received_type) and !received_type.convertsTo(expected_type))
             return utils.printErr(
                 error.TypeMismatch,
-                "comperr: Expression of type '{f}' is not convertible to '{f}' ({f}).\n",
+                "comperr: Expected '{f}', received '{f}' ({f}).\n",
                 .{ expected_type, received_type, expression.getPosition() },
                 .red,
             );
 
-        if (!expected_type.eql(received_type)) switch (expected_type) {
-            .optional => {
-                try self.print(file_writer, "({s}){{ .is_some = true, .payload = ", .{self.zag_header_contents.get(expected_type) orelse unreachable});
-                try compile(self, file_writer, expression, .{});
+        if (!expected_type.eql(received_type) and expected_type == .optional) switch (received_type) {
+            .@"typeof(null)" => try self.print(
+                file_writer,
+                "({s}){{ .is_some = false }}",
+                .{self.zag_header_contents.get(expected_type) orelse unreachable},
+            ),
+            else => if (expected_type.optional.convertsTo(received_type)) {
+                try self.print(
+                    file_writer,
+                    "({s}){{ .is_some = true, .payload = ",
+                    .{self.zag_header_contents.get(expected_type) orelse unreachable},
+                );
+                try compile(self, file_writer, expression, .{ .expected_type = expected_type.optional.* });
                 try self.write(file_writer, " }");
-            },
-            // else means other convertible types. incompatible types are unreachable.
-            else => try compile(self, file_writer, expression, .{ .is_const = opts.is_const }),
-        };
+            } else return utils.printErr(
+                error.TypeMismatch,
+                "comperr: Expected '{f}', received '{f}' ({f}).\n",
+                .{ expected_type, received_type, expression.getPosition() },
+                .red,
+            ),
+        } else try compile(self, file_writer, expression, .{ .is_const = opts.is_const });
     } else switch (expression.*) {
         .assignment => |a| try assignment(self, file_writer, a),
-        .block => |block| try self.compileBlock(file_writer, block.block),
+        .block => |block| try self.compileBlock(file_writer, block.block, .{}),
         .binary => |b| try binary(self, file_writer, b),
         .float => |float| try self.print(file_writer, "{}", .{float.float}),
         .int => |int| try self.print(file_writer, "{}", .{int.int}),

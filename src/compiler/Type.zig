@@ -102,6 +102,8 @@ pub const Type = union(enum) {
     u32,
     u64,
 
+    char,
+
     usize,
 
     f32,
@@ -112,6 +114,9 @@ pub const Type = union(enum) {
     void,
 
     type,
+
+    @"typeof(null)",
+    @"typeof(undefined)",
 
     @"struct": Struct,
     @"enum": Enum,
@@ -236,7 +241,7 @@ pub const Type = union(enum) {
                 .{ ident.ident, expr.getPosition() },
                 .red,
             ),
-            .string => .{ .reference = .{ .inner = &.u8, .is_mut = false } },
+            .string => .{ .reference = .{ .inner = &.char, .is_mut = false } },
             .char => .u8,
             .uint => |uint| if (uint.uint <= std.math.maxInt(i32)) .i32 else .i64,
             .int => |int| if (int.int <= std.math.maxInt(i32) and int.int >= std.math.minInt(i32))
@@ -450,21 +455,21 @@ pub const Type = union(enum) {
     /// That means that a type can automatically be cast to another.
     /// Examples are `i64` -> `i32` or `usize` -> `?usize`
     pub fn convertsTo(src: Type, dst: Type) bool {
-        return switch (dst) {
-            .i8, .i16, .i32, .i64 => switch (src) {
-                .i8, .i16, .i32, .i64 => true,
-                else => false,
+        return switch (src) {
+            .@"typeof(undefined)" => true,
+            .@"typeof(null)" => dst == .optional,
+            else => switch (dst) {
+                .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64, .usize => switch (src) {
+                    .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64, .usize => true,
+                    else => false,
+                },
+                .f32, .f64 => switch (src) {
+                    .f32, .f64, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64, .usize => true,
+                    else => false,
+                },
+                .optional => |inner| inner.convertsTo(src),
+                else => src.eql(dst),
             },
-            .u8, .u16, .u32, .u64, .usize => switch (src) {
-                .u8, .u16, .u32, .u64, .usize => true,
-                else => false,
-            },
-            .f32, .f64 => switch (src) {
-                .f32, .f64 => true,
-                else => false,
-            },
-            .optional => |inner| inner.eql(src),
-            else => src.eql(dst),
         };
     }
 
@@ -510,22 +515,6 @@ pub const Type = union(enum) {
             h.update(std.mem.asBytes(&tag));
 
             switch (t) {
-                .i8,
-                .i16,
-                .i32,
-                .i64,
-                .u8,
-                .u16,
-                .u32,
-                .u64,
-                .usize,
-                .f32,
-                .f64,
-                .bool,
-                .void,
-                .type,
-                => {},
-
                 .optional => |inner| h.update(std.mem.asBytes(&ctx.hash(inner.*))),
 
                 .reference => |r| {
@@ -610,6 +599,8 @@ pub const Type = union(enum) {
                         h.update(std.mem.asBytes(&mixed));
                     }
                 },
+
+                else => {}, // all primitives
             }
 
             return h.final();

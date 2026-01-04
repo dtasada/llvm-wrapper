@@ -261,7 +261,7 @@ pub const Statement = union(enum) {
     pub const For = struct {
         pos: utils.Position,
         iterator: *const ast.Expression,
-        capture: []const u8,
+        capture: ?[]const u8,
         body: *const Statement,
     };
 

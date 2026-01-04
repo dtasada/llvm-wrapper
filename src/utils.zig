@@ -43,3 +43,9 @@ pub inline fn printErr(
     print(fmt, args, color);
     return err;
 }
+
+pub fn randInt(comptime T: type) T {
+    var prng: std.Random.DefaultPrng = .init(0);
+    const rand = prng.random();
+    return rand.int(T);
+}

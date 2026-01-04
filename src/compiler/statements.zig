@@ -26,7 +26,7 @@ pub fn compile(
         .@"if" => |if_stmt| try conditional(self, file_writer, .@"if", if_stmt),
         .@"while" => |while_stmt| try conditional(self, file_writer, .@"while", while_stmt),
         .@"for" => |for_stmt| try conditional(self, file_writer, .@"for", for_stmt),
-        .block => |block| try self.compileBlock(file_writer, block.block),
+        .block => |block| try self.compileBlock(file_writer, block.block, .{}),
         .enum_declaration => |enum_decl| try compoundTypeDeclaration(self, file_writer, .@"enum", enum_decl),
         .union_declaration => |union_decl| try compoundTypeDeclaration(self, file_writer, .@"union", union_decl),
     }
@@ -162,7 +162,7 @@ fn compoundTypeDeclaration(
         }
         try self.write(file_writer, ") ");
 
-        try self.compileBlock(file_writer, method.body);
+        try self.compileBlock(file_writer, method.body, .{});
     }
 }
 
@@ -184,33 +184,40 @@ fn variableDefinition(
     file_writer: *std.ArrayList(u8),
     v: ast.Statement.VariableDefinition,
 ) CompilerError!void {
-    const variable_type: Type = if (v.type == .inferred)
-        try .infer(self, v.assigned_value)
-    else
-        try .fromAst(self, v.type);
-
     const received_type: Type = try .infer(self, v.assigned_value);
-    if (!variable_type.eql(received_type) and !received_type.convertsTo(variable_type))
+    const expected_type: ?Type = if (v.type == .inferred) null else try .fromAst(self, v.type);
+
+    if (expected_type != null and
+        !expected_type.?.eql(received_type) and
+        !received_type.convertsTo(expected_type.?))
         return utils.printErr(
             error.TypeMismatch,
-            "comperr: Type of expression doesn't match explicit type. Expected: '{f}', received '{f}' ({f})\n",
-            .{ variable_type, received_type, v.assigned_value.getPosition() },
+            "comperr: Type of expression doesn't match explicit type. Expected: '{f}', received '{f}' ({f}).\n",
+            .{ expected_type.?, received_type, v.assigned_value.getPosition() },
             .red,
         );
 
     if (!v.is_mut) try self.write(file_writer, "const ");
 
-    try self.compileVariableSignature(file_writer, v.variable_name, variable_type);
+    try self.compileVariableSignature(
+        file_writer,
+        v.variable_name,
+        expected_type orelse received_type,
+    );
 
     try self.write(file_writer, " = ");
 
-    try self.registerSymbol(v.variable_name, variable_type, .{ .symbol = .{ .is_mut = v.is_mut } });
+    try self.registerSymbol(
+        v.variable_name,
+        expected_type orelse received_type,
+        .{ .symbol = .{ .is_mut = v.is_mut } },
+    );
 
     try expressions.compile(
         self,
         file_writer,
         &v.assigned_value,
-        .{ .is_const = !v.is_mut, .expected_type = variable_type },
+        .{ .is_const = !v.is_mut, .expected_type = expected_type },
     );
 
     try self.write(file_writer, ";\n");
@@ -232,43 +239,72 @@ fn conditional(
         .@"while" => "while",
     }});
 
+    if (statement.capture) |capture|
+        if (T != .@"for" and try Type.infer(self, statement.condition.*) != .optional)
+            return utils.printErr(
+                error.IllegalExpression,
+                "comperr: {s} statement contains capture '{s}' but condition is not an optional ({f}).\n",
+                .{ @tagName(T), capture, statement.pos },
+                .red,
+            );
+
     switch (T) {
-        .@"if", .@"while" => try expressions.compile(self, file_writer, statement.condition, .{}),
-        .@"for" => switch (statement.iterator.*) {
-            .range => |range| {
-                try self.compileType(file_writer, try .infer(self, range.start.*));
-                try self.print(file_writer, " {s} = ", .{statement.capture});
-                try expressions.compile(self, file_writer, range.start, .{});
-                try self.print(file_writer, "; {s} < ", .{statement.capture});
-                try expressions.compile(self, file_writer, range.end, .{});
-                try self.print(file_writer, "; {s}++", .{statement.capture});
-            },
-            else => |other| switch (try Type.infer(self, other)) {
-                .array => |array| {
-                    try self.compileType(file_writer, .usize);
-                    try self.print(file_writer, " {s} = 0", .{statement.capture});
-                    try self.print(file_writer, "; {s} < {}", .{ statement.capture, array.size orelse
-                        @panic("unimplemented: arraylist size") });
-                    try self.print(file_writer, "; {s}++", .{statement.capture});
+        .@"if", .@"while" => switch (try Type.infer(self, statement.condition.*)) {
+            .bool, .optional => try expressions.compile(self, file_writer, statement.condition, .{}),
+            else => |t| return utils.printErr(
+                error.IllegalExpression,
+                "comperr: Illegal expression: {s} statement condition must be a boolean or an optional, received {f} ({f}).",
+                .{ @tagName(T), t, statement.pos },
+                .red,
+            ),
+        },
+        .@"for" => {
+            const capture = statement.capture orelse
+                try std.fmt.allocPrint(self.alloc, "_{}", .{utils.randInt(u64)});
+
+            switch (statement.iterator.*) {
+                .range => |range| {
+                    try self.compileType(file_writer, try .infer(self, range.start.*));
+                    try self.print(file_writer, " {s} = ", .{capture});
+                    try expressions.compile(self, file_writer, range.start, .{});
+                    try self.print(file_writer, "; {s} < ", .{capture});
+                    try expressions.compile(self, file_writer, range.end, .{});
+                    try self.print(file_writer, "; {s}++", .{capture});
                 },
-                else => |t| return utils.printErr(
-                    error.IllegalExpression,
-                    "comperr: Illegal for loop iterator of type '{f}' at {f}.\n",
-                    .{ t, statement.iterator.getPosition() },
-                    .red,
-                ),
-            },
+                else => |other| switch (try Type.infer(self, other)) {
+                    .array => |array| {
+                        try self.compileType(file_writer, .usize);
+                        try self.print(file_writer, " {s} = 0", .{capture});
+                        try self.print(file_writer, "; {s} < {}", .{ capture, array.size orelse
+                            @panic("unimplemented: arraylist size") });
+                        try self.print(file_writer, "; {s}++", .{capture});
+                    },
+                    else => |t| return utils.printErr(
+                        error.IllegalExpression,
+                        "comperr: Illegal for loop iterator of type '{f}' at {f}.\n",
+                        .{ t, statement.iterator.getPosition() },
+                        .red,
+                    ),
+                },
+            }
         },
     }
     try self.write(file_writer, ") ");
 
-    switch (T) {
-        .@"if", .@"while" => if (statement.capture != null)
-            std.debug.print("unimplemented conditional statement capture\n", .{}),
-        else => {},
-    }
-
-    try compile(self, file_writer, statement.body);
+    try self.compileBlock(
+        file_writer,
+        switch (statement.body.*) {
+            .block => |block| block.block,
+            else => b: {
+                var slice = [1]ast.Statement{statement.body.*};
+                break :b ast.Block.fromOwnedSlice(&slice);
+            },
+        },
+        .{ .capture = if (T != .@"for" and statement.capture != null) .{
+            .condition = statement.condition,
+            .name = statement.capture.?,
+        } else null },
+    );
 
     switch (T) {
         .@"if" => if (statement.@"else") |@"else"| {
@@ -300,5 +336,5 @@ fn functionDefinition(
     }
     try self.write(file_writer, ") ");
 
-    try self.compileBlock(file_writer, function_def.body);
+    try self.compileBlock(file_writer, function_def.body, .{});
 }

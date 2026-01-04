@@ -240,7 +240,7 @@ pub fn @"for"(self: *Self) ParserError!ast.Statement {
         .@"for" = .{
             .pos = pos,
             .iterator = iterator,
-            .capture = capture,
+            .capture = if (std.mem.eql(u8, capture, "_")) null else capture,
             .body = body,
         },
     };
@@ -275,7 +275,7 @@ pub fn conditional(self: *Self, comptime @"type": enum { @"if", @"while" }) Pars
             _ = self.advance(); // consume opening pipe
             const capture_name = try self.expect(self.advance(), Lexer.Token.ident, "capture", "capture name");
             try self.expect(self.advance(), Lexer.Token.pipe, "capture", "|"); // consume closing pipe
-            break :blk capture_name;
+            break :blk if (std.mem.eql(u8, capture_name, "_")) null else capture_name;
         },
         else => null,
     };

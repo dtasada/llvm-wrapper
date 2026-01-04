@@ -217,6 +217,12 @@ pub inline fn indent(self: *Self, file: *std.ArrayList(u8)) CompilerError!void {
 
 /// Entry point for the compiler. Compiles AST into C code.
 pub fn emit(self: *Self) CompilerError!void {
+    // register constants
+    try self.registerSymbol("true", .bool, .{ .symbol = .{} });
+    try self.registerSymbol("false", .bool, .{ .symbol = .{} });
+    try self.registerSymbol("null", .@"typeof(null)", .{ .symbol = .{} });
+    try self.registerSymbol("undefined", .@"typeof(undefined)", .{ .symbol = .{} });
+
     var file_writer: std.ArrayList(u8) = .empty;
 
     try self.write(&file_writer, "#include <zag.h>\n");
@@ -270,6 +276,9 @@ pub fn compileBlock(
     self: *Self,
     file_writer: *std.ArrayList(u8),
     block: ast.Block,
+    opts: struct {
+        capture: ?struct { condition: *const ast.Expression, name: []const u8 } = null,
+    },
 ) CompilerError!void {
     try self.pushScope();
     defer self.popScope();
@@ -277,6 +286,19 @@ pub fn compileBlock(
     try self.write(file_writer, "{\n");
 
     self.indent_level += 1;
+
+    if (opts.capture) |capture| {
+        try self.indent(file_writer);
+        try self.compileVariableSignature(
+            file_writer,
+            capture.name,
+            (try Type.infer(self, capture.condition.*)).optional.*,
+        );
+        try self.write(file_writer, " = (");
+        try expressions.compile(self, file_writer, capture.condition, .{});
+        try self.write(file_writer, ").payload;\n");
+    }
+
     for (block.items) |*statement| {
         try self.indent(file_writer);
         try statements.compile(self, file_writer, statement);
