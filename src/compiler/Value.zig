@@ -23,7 +23,7 @@ pub const Value = union(enum) {
         io: std.Io,
         expr: *const ast.Expression,
         c: *Compiler,
-        m: *const compiler.Module,
+        m: *compiler.Module,
     ) Error!Value {
         return switch (expr.*) {
             .int => |int| .{ .uint = int.payload },

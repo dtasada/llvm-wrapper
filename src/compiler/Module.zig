@@ -12,7 +12,7 @@ const Compiler = compiler.Compiler;
 const Module = @This();
 
 const Scope = struct {
-    symbols: std.ArrayList(*Symbol),
+    symbols: std.StringHashMap(*Symbol),
     defers: std.ArrayList(ast.Statement),
 };
 
@@ -28,7 +28,7 @@ fn registerBuiltin(
     comptime inner_name: []const u8,
     value: Value,
 ) !void {
-    try self.register(alloc, .{
+    _ = try self.register(alloc, .{
         .name = name,
         .inner_name = inner_name,
         .type = .type,
@@ -102,7 +102,7 @@ pub fn init(alloc: std.mem.Allocator, name: []const u8, source_map: []const util
     try self.registerBuiltin(alloc, "nil", "nil", .nil);
     try self.registerBuiltin(alloc, "undefined", "undefined", .undefined);
 
-    try self.register(alloc, .{
+    _ = try self.register(alloc, .{
         .name = "cast",
         .inner_name = "cast",
         .type = .{ .template = .{ .kind = .builtin_cast, .module = self } },
@@ -112,7 +112,7 @@ pub fn init(alloc: std.mem.Allocator, name: []const u8, source_map: []const util
         .free_type = false,
     });
 
-    try self.register(alloc, .{
+    _ = try self.register(alloc, .{
         .name = "sizeof",
         .inner_name = "sizeof",
         .type = .{ .template = .{ .kind = .builtin_sizeof, .module = self } },
@@ -141,7 +141,7 @@ pub fn deinit(self: *Module, alloc: std.mem.Allocator) void {
     alloc.destroy(self);
 }
 
-pub fn registerAtTopLevel(self: *Module, alloc: std.mem.Allocator, symbol: Symbol) !void {
+pub fn registerAtTopLevel(self: *Module, alloc: std.mem.Allocator, symbol: Symbol) !*Symbol {
     var new_symbol = symbol;
     if (!new_symbol.free_name) {
         const old_name = new_symbol.name;
@@ -156,19 +156,28 @@ pub fn registerAtTopLevel(self: *Module, alloc: std.mem.Allocator, symbol: Symbo
     const symbol_ptr = try alloc.create(Symbol);
     errdefer alloc.destroy(symbol_ptr);
     symbol_ptr.* = new_symbol;
-    try self.scopes.items[0].symbols.append(alloc, symbol_ptr);
+
+    const res = try self.scopes.items[0].symbols.getOrPut(symbol_ptr.name);
+    if (res.found_existing) {
+        const existing = res.value_ptr.*;
+        existing.deinit(alloc);
+        existing.* = symbol_ptr.*;
+        res.key_ptr.* = existing.name;
+        alloc.destroy(symbol_ptr);
+        return existing;
+    } else {
+        res.value_ptr.* = symbol_ptr;
+        return symbol_ptr;
+    }
 }
 
-pub fn register(self: *Module, alloc: std.mem.Allocator, symbol: Symbol) !void {
-    // If the symbol already owns its metadata, we take it.
-    // If not, we dupe the name.
+pub fn register(self: *Module, alloc: std.mem.Allocator, symbol: Symbol) !*Symbol {
     var new_symbol = symbol;
     if (!new_symbol.free_name) {
         const old_name = new_symbol.name;
         new_symbol.name = try alloc.dupe(u8, old_name);
         new_symbol.free_name = true;
     }
-    // We should also ensure inner_name is owned if it's not already.
     if (!new_symbol.free_inner_name) {
         const old_inner = new_symbol.inner_name;
         new_symbol.inner_name = try alloc.dupe(u8, old_inner);
@@ -177,10 +186,22 @@ pub fn register(self: *Module, alloc: std.mem.Allocator, symbol: Symbol) !void {
     const symbol_ptr = try alloc.create(Symbol);
     errdefer alloc.destroy(symbol_ptr);
     symbol_ptr.* = new_symbol;
-    try self.scopes.getLast().symbols.append(alloc, symbol_ptr);
+
+    const res = try self.scopes.getLast().symbols.getOrPut(symbol_ptr.name);
+    if (res.found_existing) {
+        const existing = res.value_ptr.*;
+        existing.deinit(alloc);
+        existing.* = symbol_ptr.*;
+        res.key_ptr.* = existing.name;
+        alloc.destroy(symbol_ptr);
+        return existing;
+    } else {
+        res.value_ptr.* = symbol_ptr;
+        return symbol_ptr;
+    }
 }
 
-pub fn registerPtrAtTopLevel(self: *Module, alloc: std.mem.Allocator, symbol: *Symbol) !void {
+pub fn registerPtrAtTopLevel(self: *Module, alloc: std.mem.Allocator, symbol: *Symbol) !*Symbol {
     if (!symbol.free_name) {
         const old_name = symbol.name;
         symbol.name = try alloc.dupe(u8, old_name);
@@ -191,11 +212,22 @@ pub fn registerPtrAtTopLevel(self: *Module, alloc: std.mem.Allocator, symbol: *S
         symbol.inner_name = try alloc.dupe(u8, old_inner);
         symbol.free_inner_name = true;
     }
-    try self.scopes.items[0].symbols.append(alloc, symbol);
+
+    const res = try self.scopes.items[0].symbols.getOrPut(symbol.name);
+    if (res.found_existing) {
+        const existing = res.value_ptr.*;
+        existing.deinit(alloc);
+        existing.* = symbol.*;
+        res.key_ptr.* = existing.name;
+        alloc.destroy(symbol);
+        return existing;
+    } else {
+        res.value_ptr.* = symbol;
+        return symbol;
+    }
 }
 
-pub fn registerPtr(self: *Module, alloc: std.mem.Allocator, symbol: *Symbol) !void {
-    // We assume the caller gives us a pointer they WANT us to own and manage.
+pub fn registerPtr(self: *Module, alloc: std.mem.Allocator, symbol: *Symbol) !*Symbol {
     if (!symbol.free_name) {
         const old_name = symbol.name;
         symbol.name = try alloc.dupe(u8, old_name);
@@ -206,35 +238,58 @@ pub fn registerPtr(self: *Module, alloc: std.mem.Allocator, symbol: *Symbol) !vo
         symbol.inner_name = try alloc.dupe(u8, old_inner);
         symbol.free_inner_name = true;
     }
-    try self.scopes.getLast().symbols.append(alloc, symbol);
+
+    const res = try self.scopes.getLast().symbols.getOrPut(symbol.name);
+    if (res.found_existing) {
+        const existing = res.value_ptr.*;
+        existing.deinit(alloc);
+        existing.* = symbol.*;
+        res.key_ptr.* = existing.name;
+        alloc.destroy(symbol);
+        return existing;
+    } else {
+        res.value_ptr.* = symbol;
+        return symbol;
+    }
 }
 
 pub fn pushScope(self: *Module, alloc: std.mem.Allocator) !void {
     const new_scope = try alloc.create(Scope);
     errdefer alloc.destroy(new_scope);
     new_scope.defers = .empty;
-    new_scope.symbols = .empty;
+    new_scope.symbols = .init(alloc);
     try self.scopes.append(alloc, new_scope);
 }
 
 pub fn popScope(self: *Module, alloc: std.mem.Allocator) void {
     const last_scope = self.scopes.pop().?;
-    for (last_scope.symbols.items) |symbol| {
-        symbol.deinit(alloc);
-        alloc.destroy(symbol);
+    var it = last_scope.symbols.iterator();
+    while (it.next()) |entry| {
+        entry.value_ptr.*.deinit(alloc);
+        alloc.destroy(entry.value_ptr.*);
     }
-    last_scope.symbols.deinit(alloc);
+    last_scope.symbols.deinit();
     last_scope.defers.deinit(alloc);
     alloc.destroy(last_scope);
 }
 
-pub fn getSymbol(self: *const Module, name: []const u8) ?*Symbol {
+pub fn getSymbol(self: *Module, name: []const u8) ?*Symbol {
     var it = std.mem.reverseIterator(self.scopes.items);
     while (it.next()) |scope| {
-        for (scope.symbols.items) |symbol| {
-            if (std.mem.eql(u8, symbol.name, name)) {
+        if (scope.symbols.get(name)) |symbol| return symbol;
+    }
+
+    return null;
+}
+
+pub fn findSymbolByType(self: *Module, t: Type) ?*Symbol {
+    for (self.scopes.items) |scope| {
+        var it = scope.symbols.iterator();
+        while (it.next()) |entry| {
+            const symbol = entry.value_ptr.*;
+            if (symbol.type == .type and symbol.value != null and
+                symbol.value.? == .type and symbol.value.?.type.eql(t))
                 return symbol;
-            }
         }
     }
 
@@ -242,43 +297,33 @@ pub fn getSymbol(self: *const Module, name: []const u8) ?*Symbol {
 }
 
 pub fn getExpressionMutability(
-    self: *const Module,
+    self: *Module,
     alloc: std.mem.Allocator,
     io: std.Io,
     expr: *const ast.Expression,
     c: *Compiler,
 ) errors.Error!bool {
     return switch (expr.*) {
-        .ident => |ident| {
-            const symbol = self.getSymbol(ident.payload) orelse return error.UnknownSymbol;
-            return symbol.binding == .let_mut or
-                (symbol.type == .slice and symbol.type.slice.is_mut);
+        .ident => |ident| b: {
+            const symbol = self.getSymbol(ident.payload) orelse
+                return errors.unknownSymbol(io, ident.payload, self.source_map[ident.pos]);
+            break :b symbol.binding == .let_mut;
         },
-        .index => |index| {
-            const t: Type = try .infer(alloc, io, index.lhs, c, self);
+        .reference => |ref| try self.getExpressionMutability(alloc, io, ref.inner, c),
+        .dereference => |deref| b: {
+            const t = try Type.infer(alloc, io, deref.parent, c, self);
             defer t.deinit(alloc);
-            if (t != .reference and t != .array and t != .slice)
-                return errors.illegalIndex(io, t, self.source_map[index.pos]);
 
-            const i_t: Type = try .infer(alloc, io, index.index, c, self);
-            defer i_t.deinit(alloc);
-            if (!i_t.isInteger())
-                return errors.illegalIndexType(io, i_t, self.source_map[index.pos]);
-
-            return try self.getExpressionMutability(alloc, io, index.lhs, c);
+            break :b switch (t) {
+                .reference => |ref| ref.is_mut,
+                else => errors.cannotDereference(io, t, self.source_map[deref.pos]),
+            };
         },
-        .dereference => |deref| {
-            const t: Type = try .infer(alloc, io, deref.parent, c, self);
-            defer t.deinit(alloc);
-            if (t != .reference) return errors.derefNonPtr(io, t, self.source_map[deref.pos]);
-
-            return t.reference.is_mut;
-        },
-        .member => |member| {
-            const parent_t: Type = try .infer(alloc, io, member.parent, c, self);
+        .member => |member| b: {
+            const parent_t = try Type.infer(alloc, io, member.parent, c, self);
             defer parent_t.deinit(alloc);
 
-            return switch (parent_t) {
+            break :b switch (parent_t) {
                 inline .@"struct", .@"union" => try self.getExpressionMutability(alloc, io, member.parent, c),
                 .@"enum" => false,
                 .slice => if (std.mem.eql(u8, member.member_name, "ptr") or
@@ -289,12 +334,22 @@ pub fn getExpressionMutability(
                 else => errors.badMemberAccess(io, parent_t, member.member_name, self.source_map[member.pos]),
             };
         },
+        .index => |index| {
+            const lhs_t: Type = try .infer(alloc, io, index.lhs, c, self);
+            defer lhs_t.deinit(alloc);
+
+            return switch (lhs_t) {
+                .slice => |slice| slice.is_mut,
+                .array => self.getExpressionMutability(alloc, io, index.lhs, c),
+                else => errors.cannotIndex(io, lhs_t, self.source_map[index.pos]),
+            };
+        },
         else => false,
     };
 }
 
 pub fn getSymbolFromExpression(
-    self: *const Module,
+    self: *Module,
     alloc: std.mem.Allocator,
     io: std.Io,
     expr: *const ast.Expression,
@@ -310,13 +365,13 @@ pub fn getSymbolFromExpression(
             const lhs_t = Type.infer(alloc, io, generic.lhs, c, self) catch return null;
             defer lhs_t.deinit(alloc);
 
-            const template_name = switch (lhs_t) {
-                .template => |t| switch (t.kind) {
-                    .builtin_cast => "cast",
-                    .builtin_sizeof => "sizeof",
-                    inline else => |d| d.name,
-                },
-                else => return null,
+            if (lhs_t != .template) return null;
+
+            const template = lhs_t.template;
+            const template_name = switch (template.kind) {
+                .builtin_cast => "cast",
+                .builtin_sizeof => "sizeof",
+                inline else => |d| d.name,
             };
 
             const mangled_name = Type.getMangledName(alloc, io, template_name, generic.arguments, c, self) catch return null;
@@ -326,21 +381,4 @@ pub fn getSymbolFromExpression(
         },
         else => null,
     };
-}
-
-pub fn findSymbolByType(self: *const Module, t: Type) ?*Symbol {
-    var it = std.mem.reverseIterator(self.scopes.items);
-    while (it.next()) |scope| {
-        for (scope.symbols.items) |symbol| {
-            if (symbol.type == .type and
-                symbol.value != null and
-                symbol.value.? == .type and
-                symbol.value.?.type.eql(t))
-                return symbol
-            else
-                continue;
-        }
-    }
-
-    return null;
 }

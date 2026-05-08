@@ -373,5 +373,17 @@ pub const TopLevelStatement = union(enum) {
                 inline else => |s| s.deinit(alloc),
             }
         }
+
+        pub fn name(self: *const Subtype) []const u8 {
+            return switch (self.*) {
+                inline else => |s| s.name,
+            };
+        }
+
+        pub fn pos(self: *const Subtype) usize {
+            return switch (self.*) {
+                inline else => |s| s.pos,
+            };
+        }
     };
 };

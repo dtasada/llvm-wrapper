@@ -175,7 +175,7 @@ pub const Compiler = struct {
         alloc: std.mem.Allocator,
         io: std.Io,
         t: *const Type,
-        m: *const Module,
+        m: *Module,
         pos: usize,
     ) ![]const u8 {
         return switch (t.*) {
@@ -205,7 +205,7 @@ pub const Compiler = struct {
             },
             .variadic => unreachable,
             .@"struct", .@"union", .@"enum" => {
-                const symbol = self.module.findSymbolByType(t.*).?;
+                const symbol = m.findSymbolByType(t.*) orelse return errors.unknownSymbol(io, @tagName(t.*), m.source_map[pos]);
                 return try alloc.dupe(u8, symbol.inner_name);
             },
             .array => |array| {
@@ -252,7 +252,7 @@ pub const Compiler = struct {
         alloc: std.mem.Allocator,
         io: std.Io,
         root_node: []const ast.TopLevelStatement,
-        m: *const Module,
+        m: *Module,
     ) !void {
         for (root_node) |statement| switch (statement) {
             .binding_function_declaration => |bfd| {
@@ -271,7 +271,7 @@ pub const Compiler = struct {
                     .free_type = true,
                 };
                 errdefer symbol.deinit(alloc);
-                try c.module.register(alloc, symbol);
+                _ = try c.module.register(alloc, symbol);
             },
             .binding_type_declaration => |btd| {
                 const symbol: Symbol = .{
@@ -295,7 +295,7 @@ pub const Compiler = struct {
                     .free_type = false,
                 };
                 errdefer symbol.deinit(alloc);
-                try c.module.register(alloc, symbol);
+                _ = try c.module.register(alloc, symbol);
             },
             .function_definition => |fd| {
                 if (fd.generic_parameters.len > 0) {
@@ -313,7 +313,7 @@ pub const Compiler = struct {
                         .free_inner_name = false,
                     };
                     errdefer symbol.deinit(alloc);
-                    try c.module.register(alloc, symbol);
+                    _ = try c.module.register(alloc, symbol);
                     continue;
                 }
 
@@ -333,7 +333,7 @@ pub const Compiler = struct {
                     .free_type = true,
                 };
                 errdefer symbol.deinit(alloc);
-                try c.module.register(alloc, symbol);
+                _ = try c.module.register(alloc, symbol);
             },
             .variable_definition => |vd| {
                 const t: Type = if (vd.type) |*t|
@@ -351,7 +351,7 @@ pub const Compiler = struct {
                     .free_type = true,
                 };
                 errdefer symbol.deinit(alloc);
-                try c.module.register(alloc, symbol);
+                _ = try c.module.register(alloc, symbol);
             },
             inline .struct_declaration, .enum_declaration, .union_declaration => |sd, tag| {
                 if (tag != .enum_declaration and sd.generic_types.len > 0) {
@@ -375,7 +375,7 @@ pub const Compiler = struct {
                         .free_inner_name = false,
                     };
                     errdefer symbol.deinit(alloc);
-                    try c.module.register(alloc, symbol);
+                    _ = try c.module.register(alloc, symbol);
                     continue;
                 }
 
@@ -446,7 +446,7 @@ pub const Compiler = struct {
                     .free_type = true,
                     .free_inner_name = true,
                 };
-                c.module.registerPtr(alloc, symbol) catch |err| {
+                _ = c.module.registerPtr(alloc, symbol) catch |err| {
                     symbol.deinit(alloc);
                     alloc.destroy(symbol);
                     return err;
@@ -562,7 +562,7 @@ pub const Compiler = struct {
                         .free_type = true,
                         .free_inner_name = true,
                     };
-                    c.module.registerPtr(alloc, m_symbol) catch |err| {
+                    _ = c.module.registerPtr(alloc, m_symbol) catch |err| {
                         m_symbol.deinit(alloc);
                         alloc.destroy(m_symbol);
                         return err;
@@ -577,7 +577,7 @@ pub const Compiler = struct {
 
                 ct_ptr.symbols = try symbols.toOwnedSlice(alloc);
             },
-            .import => |import_stmt| try statements.import(alloc, io, import_stmt, c),
+            .import => |import_stmt| try statements.import(alloc, io, import_stmt, c, m),
         };
     }
 };

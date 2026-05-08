@@ -73,7 +73,7 @@ pub const Type = union(enum) {
         template_name: []const u8,
         args: []const ast.Expression,
         c: *Compiler,
-        m: *const Module,
+        m: *Module,
     ) Error![]const u8 {
         var mangled_name: std.ArrayList(u8) = .empty;
         errdefer mangled_name.deinit(alloc);
@@ -105,7 +105,7 @@ pub const Type = union(enum) {
         io: std.Io,
         args: []const ast.Expression,
         c: *Compiler,
-        m: *const Module,
+        m: *Module,
         pos: usize,
     ) Error!Type {
         if (self != .template) return errors.expressionNotGeneric(io, m.source_map[pos]);
@@ -230,7 +230,7 @@ pub const Type = union(enum) {
             builtin_sizeof,
         };
 
-        module: *const Module,
+        module: *Module,
         kind: Kind,
     };
     const Reference = struct { inner: *const Type, is_mut: bool };
@@ -337,7 +337,7 @@ pub const Type = union(enum) {
         io: std.Io,
         t: *const ast.Type,
         c: *Compiler,
-        m: *const Module,
+        m: *Module,
     ) Error!*Type {
         const ret = try alloc.create(Type);
         errdefer alloc.destroy(ret);
@@ -351,7 +351,7 @@ pub const Type = union(enum) {
         io: std.Io,
         t: *const ast.Type,
         c: *Compiler,
-        module: *const Module,
+        module: *Module,
     ) Error!Type {
         return switch (t.*) {
             .symbol => |s| {
@@ -446,7 +446,7 @@ pub const Type = union(enum) {
         io: std.Io,
         expr: *const ast.Expression,
         c: *Compiler,
-        m: *const Module,
+        m: *Module,
     ) Error!Type {
         return switch (expr.*) {
             .ident => |ident| if (c.module.getSymbol(ident.payload)) |symbol|
@@ -533,7 +533,7 @@ pub const Type = union(enum) {
 
                 var found: ?struct { Type, usize } = null;
                 for (block.payload) |statement| switch (statement) {
-                    .variable_definition => |vd| try c.module.register(alloc, .{
+                    .variable_definition => |vd| _ = try c.module.register(alloc, .{
                         .name = vd.variable_name,
                         .inner_name = vd.variable_name,
                         .type = if (vd.type) |*t|
@@ -604,14 +604,17 @@ pub const Type = union(enum) {
                             inline .slice, .array => |s| try s.inner.clonePtr(alloc),
                             else => unreachable,
                         },
-                        .is_mut = c.module.getExpressionMutability(alloc, io, slice.lhs, c) catch |err| switch (err) {
-                            error.UnknownSymbol => return errors.unknownSymbol(
-                                io,
-                                slice.lhs.ident.payload,
-                                m.source_map[slice.lhs.ident.pos],
-                            ),
-                            else => return err,
-                        },
+                        .is_mut = if (lhs_t == .array)
+                            c.module.getExpressionMutability(alloc, io, slice.lhs, c) catch |err| switch (err) {
+                                error.UnknownSymbol => return errors.unknownSymbol(
+                                    io,
+                                    slice.lhs.ident.payload,
+                                    m.source_map[slice.lhs.ident.pos],
+                                ),
+                                else => return err,
+                            }
+                        else
+                            lhs_t.slice.is_mut,
                     },
                 };
             },

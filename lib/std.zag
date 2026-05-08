@@ -186,13 +186,14 @@ pub struct ArrayList<T> {
 pub struct StringHashMap<T> {
     const SIZE = 1e5;
 
-    entries: []mut ?&mut Entry,
-
     pub struct Entry {
         key: []mut u8,
         value: &mut T,
         next: ?&mut Entry,
     }
+
+    entries: []mut ?&mut Entry,
+
 
     pub fn init() StringHashMap<T> {
         let self = StringHashMap<T> { entries: alloc_slice<?&mut Entry>(SIZE) };
