@@ -1,11 +1,12 @@
 const std = @import("std");
 const ast = @import("ast");
+const errors = @import("errors.zig");
 
 pub fn mapGenerics(
     alloc: std.mem.Allocator,
     map: std.StringHashMap(ast.Expression),
     node: anytype,
-) error{ OutOfMemory, UnhandledGenericMappingTypeSubstitution }!void {
+) errors.Error!void {
     const PtrT = @TypeOf(node);
     const info = @typeInfo(PtrT);
     if (info != .pointer) return;

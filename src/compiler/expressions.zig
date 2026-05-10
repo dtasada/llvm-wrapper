@@ -45,7 +45,7 @@ pub fn compile(
 
     return switch (expr.*) {
         .bad_node => unreachable,
-        .ident => |ident| if (c.module.getSymbol(ident.payload)) |symbol|
+        .ident => |ident| if (m.getSymbol(ident.payload)) |symbol|
             try alloc.dupe(u8, symbol.inner_name)
         else
             errors.unknownSymbol(io, ident.payload, m.source_map[ident.pos]),
@@ -83,7 +83,7 @@ pub fn compile(
             const mangled_name = try Type.getMangledName(alloc, io, template_name, generic.arguments, c, m);
             defer alloc.free(mangled_name);
 
-            const symbol = c.module.getSymbol(mangled_name) orelse return error.InstantiationFailed;
+            const symbol = m.getSymbol(mangled_name) orelse return error.InstantiationFailed;
             return try alloc.dupe(u8, symbol.inner_name);
         },
         .array_instantiation => |inst| {

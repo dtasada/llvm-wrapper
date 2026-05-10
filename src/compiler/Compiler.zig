@@ -543,15 +543,22 @@ pub const Compiler = struct {
                 for (sd.methods) |method| {
                     if (method.generic_parameters.len > 0) continue;
 
-                    const m_inner_name = try std.fmt.allocPrint(alloc, "{s}_{s}", .{
-                        symbol.inner_name,
-                        method.name,
-                    });
-
                     const method_t_ast = try method.getType(alloc);
                     defer method_t_ast.deinit(alloc);
+
                     const t: Type = try .fromAst(alloc, io, &method_t_ast, c, m);
-                    const m_symbol = try alloc.create(Symbol);
+                    const m_symbol = alloc.create(Symbol) catch |err| {
+                        t.deinit(alloc);
+                        return err;
+                    };
+                    const m_inner_name = std.fmt.allocPrint(alloc, "{s}_{s}", .{
+                        symbol.inner_name,
+                        method.name,
+                    }) catch |err| {
+                        t.deinit(alloc);
+                        m_symbol.deinit(alloc);
+                        return err;
+                    };
                     m_symbol.* = .{
                         .name = try alloc.dupe(u8, method.name),
                         .inner_name = m_inner_name,

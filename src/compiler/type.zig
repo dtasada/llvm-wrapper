@@ -449,7 +449,7 @@ pub const Type = union(enum) {
         m: *Module,
     ) Error!Type {
         return switch (expr.*) {
-            .ident => |ident| if (c.module.getSymbol(ident.payload)) |symbol|
+            .ident => |ident| if (m.getSymbol(ident.payload)) |symbol|
                 try symbol.type.clone(alloc)
             else
                 errors.unknownSymbol(io, ident.payload, m.source_map[ident.pos]),
