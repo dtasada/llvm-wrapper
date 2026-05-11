@@ -653,7 +653,7 @@ pub struct Quaternion {
         }
     }
 
-    pub fn from_euler(pitch: f32, yaw: f32, roll: f32) Quaternion {
+    pub fn from_euler(pitch, yaw, roll: f32) Quaternion {
         let x0 = std.cos<f32>(pitch * 0.5);
         let x1 = std.sin<f32>(pitch * 0.5);
         let y0 = std.cos<f32>(yaw * 0.5);
@@ -786,21 +786,21 @@ pub struct Matrix {
         0.0, 0.0, 0.0, 1.0
     )
 
-    pub fn add(left: Matrix, right: Matrix) Matrix -> Matrix.init(
+    pub fn add(left, right: Matrix) Matrix -> Matrix.init(
         left.m0 + right.m0, left.m1 + right.m1, left.m2 + right.m2, left.m3 + right.m3,
         left.m4 + right.m4, left.m5 + right.m5, left.m6 + right.m6, left.m7 + right.m7,
         left.m8 + right.m8, left.m9 + right.m9, left.m10 + right.m10, left.m11 + right.m11,
         left.m12 + right.m12, left.m13 + right.m13, left.m14 + right.m14, left.m15 + right.m15
     )
 
-    pub fn subtract(left: Matrix, right: Matrix) Matrix -> Matrix.init(
+    pub fn subtract(left, right: Matrix) Matrix -> Matrix.init(
         left.m0 - right.m0, left.m1 - right.m1, left.m2 - right.m2, left.m3 - right.m3,
         left.m4 - right.m4, left.m5 - right.m5, left.m6 - right.m6, left.m7 - right.m7,
         left.m8 - right.m8, left.m9 - right.m9, left.m10 - right.m10, left.m11 - right.m11,
         left.m12 - right.m12, left.m13 - right.m13, left.m14 - right.m14, left.m15 - right.m15
     )
 
-    pub fn multiply(left: Matrix, right: Matrix) Matrix -> Matrix.init(
+    pub fn multiply(left, right: Matrix) Matrix -> Matrix.init(
         left.m0*right.m0 + left.m1*right.m4 + left.m2*right.m8 + left.m3*right.m12,
         left.m0*right.m1 + left.m1*right.m5 + left.m2*right.m9 + left.m3*right.m13,
         left.m0*right.m2 + left.m1*right.m6 + left.m2*right.m10 + left.m3*right.m14,
@@ -819,7 +819,7 @@ pub struct Matrix {
         left.m12*right.m3 + left.m13*right.m7 + left.m14*right.m11 + left.m15*right.m15
     )
 
-    pub fn translate(x: f32, y: f32, z: f32) Matrix -> Matrix.init(
+    pub fn translate(x, y, z: f32) Matrix -> Matrix.init(
         1.0, 0.0, 0.0, x,
         0.0, 1.0, 0.0, y,
         0.0, 0.0, 1.0, z,
@@ -934,14 +934,14 @@ pub struct Matrix {
         );
     }
 
-    pub fn scale(x: f32, y: f32, z: f32) Matrix -> Matrix.init(
+    pub fn scale(x, y, z: f32) Matrix -> Matrix.init(
         x,   0.0, 0.0, 0.0,
         0.0, y,   0.0, 0.0,
         0.0, 0.0, z,   0.0,
         0.0, 0.0, 0.0, 1.0
     )
 
-    pub fn frustum(left: f64, right: f64, bottom: f64, top: f64, near: f64, far: f64) Matrix {
+    pub fn frustum(left, right, bottom, top, near, far: f64) Matrix {
         let rl = cast<f32>(right - left);
         let tb = cast<f32>(top - bottom);
         let fn_ = cast<f32>(far - near);
@@ -956,7 +956,7 @@ pub struct Matrix {
     }
 
     // NOTE: Fovy angle must be provided in radians
-    pub fn perspective(fovY: f64, aspect: f64, near: f64, far: f64) Matrix {
+    pub fn perspective(fovY, aspect, near, far: f64) Matrix {
         let top = near * std.tan<f32>(fovY * 0.5);
         let bottom = -top;
         let right = top * aspect;
@@ -964,7 +964,7 @@ pub struct Matrix {
         return Matrix.frustum(left, right, bottom, top, near, far);
     }
 
-    pub fn ortho(left: f64, right: f64, bottom: f64, top: f64, near: f64, far: f64) Matrix {
+    pub fn ortho(left, right, bottom, top, near, far: f64) Matrix {
         let rl = cast<f32>(right - left);
         let tb = cast<f32>(top - bottom);
         let fn_ = cast<f32>(far - near);
@@ -977,7 +977,7 @@ pub struct Matrix {
         );
     }
 
-    pub fn look_at(eye: Vector3, target: Vector3, up: Vector3) Matrix {
+    pub fn look_at(eye, target, up: Vector3) Matrix {
         let vz = eye.subtract(target).normalize();
         let vx = up.cross_product(vz).normalize();
         let vy = vz.cross_product(vx);
@@ -3458,3 +3458,147 @@ bind fn DetachAudioStreamProcessor(stream: AudioStream, processor: AudioCallback
 
 bind fn AttachAudioMixedProcessor(processor: AudioCallback) void;
 bind fn DetachAudioMixedProcessor(processor: AudioCallback) void;
+
+// raymath.h
+bind fn Vector2Zero() Vector2;
+bind fn Vector2One() Vector2;
+bind fn Vector2Add(v1, v2: Vector2) Vector2;
+bind fn Vector2AddValue(v: Vector2, add: c_float) Vector2;
+bind fn Vector2Subtract(v1, v2: Vector2) Vector2;
+bind fn Vector2SubtractValue(v: Vector2, sub: c_float) Vector2;
+bind fn Vector2Length(v: Vector2) c_float;
+bind fn Vector2LengthSqr(v: Vector2) c_float;
+bind fn Vector2DotProduct(v1, v2: Vector2) c_float;
+bind fn Vector2CrossProduct(v1, v2: Vector2) c_float;
+bind fn Vector2Distance(v1, v2: Vector2) c_float;
+bind fn Vector2DistanceSqr(v1, v2: Vector2) c_float;
+bind fn Vector2Angle(v1, v2: Vector2) c_float;
+bind fn Vector2LineAngle(start, end: Vector2) c_float;
+bind fn Vector2Scale(v: Vector2, scale: c_float) Vector2;
+bind fn Vector2Multiply(v1, v2: Vector2) Vector2;
+bind fn Vector2Negate(v: Vector2) Vector2;
+bind fn Vector2Divide(v1, v2: Vector2) Vector2;
+bind fn Vector2Normalize(v: Vector2) Vector2;
+bind fn Vector2Transform(v: Vector2, mat: Matrix) Vector2;
+bind fn Vector2Lerp(v1, v2: Vector2, amount: c_float) Vector2;
+bind fn Vector2Reflect(v, normal: Vector2) Vector2;
+bind fn Vector2Min(v1, v2: Vector2) Vector2;
+bind fn Vector2Max(v1, v2: Vector2) Vector2;
+bind fn Vector2Rotate(v: Vector2, angle: c_float) Vector2;
+bind fn Vector2MoveTowards(v, target: Vector2, maxDistance: c_float) Vector2;
+bind fn Vector2Invert(v: Vector2) Vector2;
+bind fn Vector2Clamp(v, min, max: Vector2) Vector2;
+bind fn Vector2ClampValue(v: Vector2, min, max: c_float) Vector2;
+bind fn Vector2Equals(p, q: Vector2) bool;
+
+bind fn Vector3Zero() Vector3;
+bind fn Vector3One() Vector3;
+bind fn Vector3Add(v1, v2: Vector3) Vector3;
+bind fn Vector3AddValue(v: Vector3, add: c_float) Vector3;
+bind fn Vector3Subtract(v1, v2: Vector3) Vector3;
+bind fn Vector3SubtractValue(v: Vector3, sub: c_float) Vector3;
+bind fn Vector3Scale(v: Vector3, scalar: c_float) Vector3;
+bind fn Vector3Multiply(v1, v2: Vector3) Vector3;
+bind fn Vector3CrossProduct(v1, v2: Vector3) Vector3;
+bind fn Vector3Perpendicular(v: Vector3) Vector3;
+bind fn Vector3Length(v: Vector3) c_float;
+bind fn Vector3LengthSqr(v: Vector3) c_float;
+bind fn Vector3DotProduct(v1, v2: Vector3) c_float;
+bind fn Vector3Distance(v1, v2: Vector3) c_float;
+bind fn Vector3DistanceSqr(v1, v2: Vector3) c_float;
+bind fn Vector3Angle(v1, v2: Vector3) c_float;
+bind fn Vector3Negate(v: Vector3) Vector3;
+bind fn Vector3Divide(v1, v2: Vector3) Vector3;
+bind fn Vector3Normalize(v: Vector3) Vector3;
+bind fn Vector3Project(v1, v2: Vector3) Vector3;
+bind fn Vector3Reject(v1, v2: Vector3) Vector3;
+bind fn Vector3OrthoNormalize(mut v1: &mut Vector3, mut v2: &mut Vector3) void;
+bind fn Vector3Transform(v: Vector3, mat: Matrix) Vector3;
+bind fn Vector3RotateByQuaternion(v: Vector3, q: Quaternion) Vector3;
+bind fn Vector3RotateByAxisAngle(v: Vector3, axis: Vector3, angle: c_float) Vector3;
+bind fn Vector3MoveTowards(v, target: Vector3, maxDistance: c_float) Vector3;
+bind fn Vector3Lerp(v1, v2: Vector3, amount: c_float) Vector3;
+bind fn Vector3Reflect(v, normal: Vector3) Vector3;
+bind fn Vector3Min(v1, v2: Vector3) Vector3;
+bind fn Vector3Max(v1, v2: Vector3) Vector3;
+bind fn Vector3Barycenter(p, a, b, c: Vector3) Vector3;
+bind fn Vector3Unproject(source: Vector3, projection, view: Matrix) Vector3;
+bind fn Vector3ToFloatV(v: Vector3) [3]c_float;
+bind fn Vector3Invert(v: Vector3) Vector3;
+bind fn Vector3Clamp(v, min, max: Vector3) Vector3;
+bind fn Vector3ClampValue(v: Vector3, min, max: c_float) Vector3;
+bind fn Vector3Equals(p, q: Vector3) bool;
+
+bind fn Vector4Zero() Vector4;
+bind fn Vector4One() Vector4;
+bind fn Vector4Add(v1, v2: Vector4) Vector4;
+bind fn Vector4AddValue(v: Vector4, add: c_float) Vector4;
+bind fn Vector4Subtract(v1, v2: Vector4) Vector4;
+bind fn Vector4SubtractValue(v: Vector4, sub: c_float) Vector4;
+bind fn Vector4Length(v: Vector4) c_float;
+bind fn Vector4LengthSqr(v: Vector4) c_float;
+bind fn Vector4DotProduct(v1, v2: Vector4) c_float;
+bind fn Vector4Distance(v1, v2: Vector4) c_float;
+bind fn Vector4DistanceSqr(v1, v2: Vector4) c_float;
+bind fn Vector4Scale(v: Vector4, scale: c_float) Vector4;
+bind fn Vector4Multiply(v1, v2: Vector4) Vector4;
+bind fn Vector4Negate(v: Vector4) Vector4;
+bind fn Vector4Divide(v1, v2: Vector4) Vector4;
+bind fn Vector4Normalize(v: Vector4) Vector4;
+bind fn Vector4Min(v1, v2: Vector4) Vector4;
+bind fn Vector4Max(v1, v2: Vector4) Vector4;
+bind fn Vector4Lerp(v1, v2: Vector4, amount: c_float) Vector4;
+bind fn Vector4MoveTowards(v, target: Vector4, maxDistance: c_float) Vector4;
+bind fn Vector4Invert(v: Vector4) Vector4;
+bind fn Vector4Equals(p, q: Vector4) bool;
+bind fn Vector4Transform(v: Vector4, mat: Matrix) Vector4;
+
+
+bind fn QuaternionZero() Quaternion;
+bind fn QuaternionAdd(q1: Quaternion, q2: Quaternion) Quaternion;
+bind fn QuaternionAddValue(q: Quaternion, add: c_float) Quaternion;
+bind fn QuaternionSubtract(q1: Quaternion, q2: Quaternion) Quaternion;
+bind fn QuaternionSubtractValue(q: Quaternion, sub: c_float) Quaternion;
+bind fn QuaternionIdentity() Quaternion;
+bind fn QuaternionLength(q: Quaternion) c_float;
+bind fn QuaternionNormalize(q: Quaternion) Quaternion;
+bind fn QuaternionInvert(q: Quaternion) Quaternion;
+bind fn QuaternionMultiply(q1: Quaternion, q2: Quaternion) Quaternion;
+bind fn QuaternionScale(q: Quaternion, mul: c_float) Quaternion;
+bind fn QuaternionDivide(q1: Quaternion, q2: Quaternion) Quaternion;
+bind fn QuaternionLerp(q1: Quaternion, q2: Quaternion, amount: c_float) Quaternion;
+bind fn QuaternionNlerp(q1: Quaternion, q2: Quaternion, amount: c_float) Quaternion;
+bind fn QuaternionSlerp(q1: Quaternion, mut q2: Quaternion, amount: c_float) Quaternion;
+bind fn QuaternionFromVector3ToVector3(from: Vector3, to: Vector3) Quaternion;
+bind fn QuaternionFromMatrix(mat: Matrix) Quaternion;
+bind fn QuaternionToMatrix(q: Quaternion) Matrix;
+bind fn QuaternionFromAxisAngle(mut axis: Vector3, mut angle: c_float) Quaternion;
+bind fn QuaternionToAxisAngle(mut q: Quaternion, outAxis: &mut Vector3, outAngle: &mut c_float) void;
+bind fn QuaternionFromEuler(pitch, yaw, roll: c_float) Quaternion;
+bind fn QuaternionToEuler(q: Quaternion) Vector3;
+bind fn QuaternionTransform(q: Quaternion, mat: Matrix) Quaternion;
+bind fn QuaternionEquals(p: Quaternion, q: Quaternion) bool;
+
+bind fn MatrixDeterminant(mat: Matrix) c_float;
+bind fn MatrixTrace(mat: Matrix) c_float;
+bind fn MatrixTranspose(mat: Matrix) Matrix;
+bind fn MatrixInvert(mat: Matrix) Matrix;
+bind fn MatrixIdentity() Matrix;
+bind fn MatrixAdd(left, right: Matrix) Matrix;
+bind fn MatrixSubtract(left, right: Matrix) Matrix;
+bind fn MatrixMultiply(left, right: Matrix) Matrix;
+bind fn MatrixTranslate(x, y, z: c_float) Matrix;
+bind fn MatrixRotate(axis: Vector3, angle: c_float) Matrix;
+bind fn MatrixRotateX(angle: c_float) Matrix;
+bind fn MatrixRotateY(angle: c_float) Matrix;
+bind fn MatrixRotateZ(angle: c_float) Matrix;
+bind fn MatrixRotateXYZ(angle: Vector3) Matrix;
+bind fn MatrixRotateZYX(angle: Vector3) Matrix;
+bind fn MatrixScale(x, y, z: c_float) Matrix;
+bind fn MatrixFrustum(left, right, bottom, top, near, far: c_double) Matrix;
+bind fn MatrixPerspective(fovY, aspect, near, far: c_double) Matrix;
+bind fn MatrixOrtho(left, right, bottom, top, near, far: c_double) Matrix;
+bind fn MatrixLook_at(eye, target, up: Vector3) Matrix;
+bind fn MatrixToFloatV(mat: Matrix) [16]c_float;
+bind fn MatrixCompose(translation: Vector3, rotation: Quaternion, scale: Vector3) Matrix;
+bind fn MatrixDecompose(mat: Matrix, translation: &mut Vector3, rotation: &mut Quaternion, scale: &mut Vector3) void;

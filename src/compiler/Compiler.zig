@@ -340,8 +340,9 @@ pub const Compiler = struct {
                     try .fromAst(alloc, io, t, c, m)
                 else
                     try .infer(alloc, io, &vd.assigned_value, c, m);
+                errdefer t.deinit(alloc);
 
-                const symbol: Symbol = .{
+                _ = try c.module.register(alloc, .{
                     .name = vd.variable_name,
                     .type = t,
                     .binding = vd.binding,
@@ -349,9 +350,7 @@ pub const Compiler = struct {
                     .free_name = false,
                     .free_inner_name = false,
                     .free_type = true,
-                };
-                errdefer symbol.deinit(alloc);
-                _ = try c.module.register(alloc, symbol);
+                });
             },
             inline .struct_declaration, .enum_declaration, .union_declaration => |sd, tag| {
                 if (tag != .enum_declaration and sd.generic_types.len > 0) {
@@ -412,72 +411,46 @@ pub const Compiler = struct {
 
                 const inner_name = try std.fmt.allocPrint(alloc, "{s}_{s}", .{ c.module.name, sd.name });
 
-                const symbol = try alloc.create(Symbol);
-                symbol.* = .{
+                const symbol = try c.module.register(alloc, .{
                     .name = try alloc.dupe(u8, sd.name),
                     .inner_name = inner_name,
                     .type = .type,
                     .binding = .@"const",
                     .is_pub = sd.is_pub,
                     .value = .{
-                        .type = switch (tag) {
-                            .struct_declaration => .{ .@"struct" = .{
-                                .name = try alloc.dupe(u8, sd.name),
-                                .members = &.{},
-                                .symbols = &.{},
-                                .tag_type = tag_type,
-                            } },
-                            .union_declaration => .{ .@"union" = .{
-                                .name = try alloc.dupe(u8, sd.name),
-                                .members = &.{},
-                                .symbols = &.{},
-                                .tag_type = tag_type,
-                            } },
-                            .enum_declaration => .{ .@"enum" = .{
-                                .name = try alloc.dupe(u8, sd.name),
-                                .members = &.{},
-                                .symbols = &.{},
-                                .tag_type = tag_type,
-                            } },
-                            else => unreachable,
-                        },
+                        .type = @unionInit(Type, @tagName(t_tag), .{
+                            .name = try alloc.dupe(u8, sd.name),
+                            .members = &.{},
+                            .symbols = &.{},
+                            .tag_type = tag_type,
+                        }),
                     },
                     .free_name = true,
                     .free_type = true,
                     .free_inner_name = true,
-                };
-                _ = c.module.registerPtr(alloc, symbol) catch |err| {
-                    symbol.deinit(alloc);
-                    alloc.destroy(symbol);
-                    return err;
-                };
+                });
 
-                const ct_type = Type.CompoundType(t_tag);
-                var members: std.ArrayList(ct_type.Member) = .empty;
-                defer {
-                    for (members.items) |member_m| member_m.deinit(alloc);
-                    members.deinit(alloc);
-                }
+                var members: std.ArrayList(Type.CompoundType(t_tag).Member) = .empty;
+                defer utils.deinitArrayList(Type.CompoundType(t_tag).Member, &members, alloc);
 
                 var symbols: std.ArrayList(Symbol) = .empty;
-                defer {
-                    for (symbols.items) |sym| sym.deinit(alloc);
-                    symbols.deinit(alloc);
-                }
+                defer utils.deinitArrayList(Symbol, &symbols, alloc);
 
-                switch (tag) {
+                for (sd.members, 0..) |member, i| switch (tag) {
                     .struct_declaration => {
-                        for (sd.members) |member| {
-                            const member_t: Type = try .fromAst(alloc, io, &member.type, c, m);
-                            try members.append(alloc, .{
-                                .name = try alloc.dupe(u8, member.name),
-                                .inner_name = try alloc.dupe(u8, member.name),
-                                .type = member_t,
-                            });
-                        }
+                        const member_t: Type = try .fromAst(alloc, io, &member.type, c, m);
+                        errdefer member_t.deinit(alloc);
+
+                        try members.append(alloc, .{
+                            .name = try alloc.dupe(u8, member.name),
+                            .inner_name = try alloc.dupe(u8, member.name),
+                            .type = member_t,
+                        });
                     },
-                    .union_declaration => for (sd.members) |member| {
+                    .union_declaration => {
                         const member_t: Type = if (member.type) |*t| try .fromAst(alloc, io, t, c, m) else .u8;
+                        errdefer member_t.deinit(alloc);
+
                         try members.append(alloc, .{
                             .name = try alloc.dupe(u8, member.name),
                             .inner_name = try alloc.dupe(u8, member.name),
@@ -485,28 +458,29 @@ pub const Compiler = struct {
                         });
                     },
                     .enum_declaration => {
-                        for (sd.members, 0..) |member, i| {
-                            const value: Value = if (member.value) |*v|
-                                try .eval(alloc, io, v, c, m)
-                            else
-                                .{ .uint = if (i == 0) 0 else members.items[i - 1].value + 1 };
+                        const value: Value = if (member.value) |*v|
+                            try .eval(alloc, io, v, c, m)
+                        else
+                            .{ .uint = if (i == 0) 0 else members.items[i - 1].value + 1 };
+                        errdefer value.deinit(alloc);
 
-                            if (value != .uint)
-                                return errors.enumMemberMustBeInteger(io, value.getType(), m.source_map[sd.pos]);
+                        if (value != .uint)
+                            return errors.enumMemberMustBeInteger(io, value.getType(), m.source_map[sd.pos]);
 
-                            const m_inner_name = try std.fmt.allocPrint(alloc, "{s}_{s}", .{
-                                symbol.inner_name,
-                                member.name,
-                            });
-                            try members.append(alloc, .{
-                                .name = try alloc.dupe(u8, member.name),
-                                .inner_name = m_inner_name,
-                                .value = value.uint,
-                            });
-                        }
+                        const m_inner_name = try std.fmt.allocPrint(alloc, "{s}_{s}", .{
+                            symbol.inner_name,
+                            member.name,
+                        });
+                        errdefer alloc.free(m_inner_name);
+
+                        try members.append(alloc, .{
+                            .name = try alloc.dupe(u8, member.name),
+                            .inner_name = m_inner_name,
+                            .value = value.uint,
+                        });
                     },
                     else => unreachable,
-                }
+                };
 
                 const ct_ptr = switch (tag) {
                     .struct_declaration => &symbol.value.?.type.@"struct",
@@ -515,7 +489,7 @@ pub const Compiler = struct {
                     else => unreachable,
                 };
 
-                for (sd.members, 0..) |member, i| {
+                for (sd.members, 0..) |member, i|
                     if (tag == .enum_declaration) {
                         try members.append(alloc, .{
                             .name = try alloc.dupe(u8, member.name),
@@ -535,8 +509,7 @@ pub const Compiler = struct {
                             .inner_name = try alloc.dupe(u8, member.name),
                             .type = member_t,
                         });
-                    }
-                }
+                    };
 
                 ct_ptr.members = try members.toOwnedSlice(alloc);
 
@@ -547,19 +520,15 @@ pub const Compiler = struct {
                     defer method_t_ast.deinit(alloc);
 
                     const t: Type = try .fromAst(alloc, io, &method_t_ast, c, m);
-                    const m_symbol = alloc.create(Symbol) catch |err| {
-                        t.deinit(alloc);
-                        return err;
-                    };
                     const m_inner_name = std.fmt.allocPrint(alloc, "{s}_{s}", .{
                         symbol.inner_name,
                         method.name,
                     }) catch |err| {
                         t.deinit(alloc);
-                        m_symbol.deinit(alloc);
                         return err;
                     };
-                    m_symbol.* = .{
+
+                    const m_symbol = try c.module.register(alloc, .{
                         .name = try alloc.dupe(u8, method.name),
                         .inner_name = m_inner_name,
                         .type = t,
@@ -568,12 +537,7 @@ pub const Compiler = struct {
                         .free_name = true,
                         .free_type = true,
                         .free_inner_name = true,
-                    };
-                    _ = c.module.registerPtr(alloc, m_symbol) catch |err| {
-                        m_symbol.deinit(alloc);
-                        alloc.destroy(m_symbol);
-                        return err;
-                    };
+                    });
 
                     const cloned = try m_symbol.clone(alloc);
                     try symbols.append(alloc, cloned);
@@ -610,8 +574,7 @@ pub fn emit(
     defer alloc.free(input);
     defer if (free_file_path) alloc.free(file_path);
 
-    const owned_file_path = try alloc.dupe(u8, file_path);
-    const tokens, const source_map = try lexer.tokenize(alloc, io, input, owned_file_path);
+    const tokens, const source_map = try lexer.tokenize(alloc, io, input, file_path);
 
     const root_node = try parser.parse(alloc, io, tokens, source_map);
     defer utils.deinitSlice(ast.TopLevelStatement, root_node, alloc);
@@ -703,8 +666,7 @@ pub fn processImports(
 
     std.debug.assert(std.mem.eql(u8, file_path[file_path.len - 4 ..], ".zag"));
 
-    const owned_file_path = try alloc.dupe(u8, file_path);
-    const tokens, const source_map = try lexer.tokenize(alloc, io, input, owned_file_path);
+    const tokens, const source_map = try lexer.tokenize(alloc, io, input, file_path);
 
     const root_node = try parser.parse(alloc, io, tokens, source_map);
     defer utils.deinitSlice(ast.TopLevelStatement, root_node, alloc);

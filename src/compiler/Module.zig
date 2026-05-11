@@ -136,7 +136,6 @@ pub fn deinit(self: *Module, alloc: std.mem.Allocator) void {
     }
     self.instantiations.deinit();
     alloc.free(self.name);
-    if (self.source_map.len > 0) alloc.free(self.source_map[0].path);
     alloc.free(self.source_map);
     alloc.destroy(self);
 }
